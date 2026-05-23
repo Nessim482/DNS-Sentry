@@ -19,11 +19,11 @@ def suspicious_result() -> dict[str, str | float | bool]:
     }
 
 
-def test_send_discord_alert_posts_payload(monkeypatch) -> None:
+def captured_payload(monkeypatch, result: dict[str, str | float | bool]) -> dict:
     alerts._RECENT_ALERTS.clear()
     calls = {}
 
-    def fake_post(url: str, json: dict[str, str], timeout: float) -> FakeResponse:
+    def fake_post(url: str, json: dict, timeout: float) -> FakeResponse:
         calls["url"] = url
         calls["json"] = json
         calls["timeout"] = timeout
@@ -31,29 +31,73 @@ def test_send_discord_alert_posts_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(alerts.requests, "post", fake_post)
 
-    success = alerts.send_discord_alert(
-        suspicious_result(),
-        TEST_WEBHOOK_URL,
-    )
-
-    content = calls["json"]["content"]
-
-    assert success is True
+    assert alerts.send_discord_alert(result, TEST_WEBHOOK_URL) is True
     assert calls["url"] == TEST_WEBHOOK_URL
     assert calls["timeout"] == 3.0
-    assert "domain: dghpcy1sb29rcy1sawtllwjhc2u2nc1kyxrh.attacker.com" in content
-    assert "entropy: 4.20" in content
-    assert "threshold: 3.50" in content
-    assert "suspicious: True" in content
-    assert "timestamp:" in content
+
+    return calls["json"]
+
+
+def field_map(payload: dict) -> dict[str, str]:
+    embed = payload["embeds"][0]
+
+    return {field["name"]: field["value"] for field in embed["fields"]}
+
+
+def test_send_discord_alert_posts_payload(monkeypatch) -> None:
+    payload = captured_payload(monkeypatch, suspicious_result())
+    embed = payload["embeds"][0]
+    fields = field_map(payload)
+
+    assert "content" not in payload
+    assert embed["title"] == "DNS-Sentry Alert: Suspicious DNS Query"
+    assert embed["description"] == (
+        "A DNS query with high-entropy characteristics was detected."
+    )
+    assert embed["footer"]["text"] == "DNS-Sentry • Defensive DNS Monitoring"
+    assert fields["Domain"] == "dghpcy1sb29rcy1sawtllwjhc2u2nc1kyxrh.attacker.com"
+    assert fields["Subdomain"] == "dghpcy1sb29rcy1sawtllwjhc2u2nc1kyxrh"
+    assert fields["Entropy"] == "4.20"
+    assert fields["Threshold"] == "3.50"
+    assert fields["Detection"] == "High"
+    assert fields["Timestamp UTC"].endswith("Z")
+    assert TEST_WEBHOOK_URL not in str(payload)
+
+
+def test_send_discord_alert_uses_medium_severity(monkeypatch) -> None:
+    result = suspicious_result()
+    result["entropy"] = 3.5
+    payload = captured_payload(monkeypatch, result)
+
+    assert field_map(payload)["Detection"] == "Medium"
+    assert payload["embeds"][0]["color"] == 0xE67E22
+
+
+def test_send_discord_alert_uses_high_severity(monkeypatch) -> None:
+    result = suspicious_result()
+    result["entropy"] = 4.2
+    payload = captured_payload(monkeypatch, result)
+
+    assert field_map(payload)["Detection"] == "High"
+    assert payload["embeds"][0]["color"] == 0xE74C3C
+
+
+def test_send_discord_alert_uses_critical_severity(monkeypatch) -> None:
+    result = suspicious_result()
+    result["entropy"] = 4.7
+    payload = captured_payload(monkeypatch, result)
+
+    assert field_map(payload)["Detection"] == "Critical"
+    assert payload["embeds"][0]["color"] == 0xC0392B
 
 
 def test_send_discord_alert_uses_config_webhook(monkeypatch) -> None:
     alerts._RECENT_ALERTS.clear()
     calls = {}
 
-    def fake_post(url: str, json: dict[str, str], timeout: float) -> FakeResponse:
+    def fake_post(url: str, json: dict, timeout: float) -> FakeResponse:
         calls["url"] = url
+        calls["json"] = json
         return FakeResponse(204)
 
     monkeypatch.setattr(alerts, "load_discord_webhook_url", lambda: TEST_WEBHOOK_URL)
@@ -61,6 +105,7 @@ def test_send_discord_alert_uses_config_webhook(monkeypatch) -> None:
 
     assert alerts.send_discord_alert(suspicious_result()) is True
     assert calls["url"] == TEST_WEBHOOK_URL
+    assert TEST_WEBHOOK_URL not in str(calls["json"])
 
 
 def test_send_discord_alert_rejects_invalid_webhook(monkeypatch) -> None:
