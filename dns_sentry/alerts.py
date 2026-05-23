@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from .config import load_discord_webhook_url
+
 _HTTP_TIMEOUT_SECONDS = 3.0
 _ALERT_WINDOW_SECONDS = 60.0
 _RECENT_ALERTS: dict[tuple[str, str], float] = {}
@@ -35,13 +37,18 @@ def _build_discord_payload(result: dict, timestamp: str) -> dict[str, str]:
     }
 
 
-def send_discord_alert(result: dict, webhook_url: str) -> bool:
+def send_discord_alert(result: dict, webhook_url: str | None = None) -> bool:
     """Send a minimal Discord webhook alert for a suspicious DNS result."""
-    if not _is_valid_webhook_url(webhook_url):
+    effective_webhook_url = webhook_url or load_discord_webhook_url()
+
+    if effective_webhook_url is None:
+        return False
+
+    if not _is_valid_webhook_url(effective_webhook_url):
         return False
 
     domain = str(result["domain"])
-    alert_key = (webhook_url, domain)
+    alert_key = (effective_webhook_url, domain)
     current_time = monotonic()
     previous_alert_time = _RECENT_ALERTS.get(alert_key)
 
@@ -56,7 +63,7 @@ def send_discord_alert(result: dict, webhook_url: str) -> bool:
 
     try:
         response = requests.post(
-            webhook_url,
+            effective_webhook_url,
             json=payload,
             timeout=_HTTP_TIMEOUT_SECONDS,
         )
@@ -70,4 +77,3 @@ def send_discord_alert(result: dict, webhook_url: str) -> bool:
         return True
 
     return False
-
