@@ -17,16 +17,17 @@ from .parser import parse_dns_query
 
 _DNS_CAPTURE_FILTER = "udp and dst port 53"
 _LOGGER = logging.getLogger(LOGGER_NAME)
+_SNIFFING_ERROR_MESSAGE = (
+    "Live DNS sniffing requires Scapy and a packet capture driver. "
+    "On Windows, install Npcap and run the terminal as Administrator."
+)
 
 
 def _load_scapy() -> tuple[Any, Any, Any, Callable[..., Any]]:
     try:
         from scapy.all import DNS, DNSQR, UDP, sniff
     except ImportError as error:
-        raise RuntimeError(
-            "Scapy is required to start DNS sniffing. "
-            "Install it with: python -m pip install scapy"
-        ) from error
+        raise RuntimeError(_SNIFFING_ERROR_MESSAGE) from error
 
     return DNS, DNSQR, UDP, sniff
 
@@ -170,13 +171,16 @@ def start_dns_sniffer(
     if effective_interface is not None:
         sniff_kwargs["iface"] = effective_interface
 
-    if stop_event is None:
-        sniff(**sniff_kwargs)
-        return
+    try:
+        if stop_event is None:
+            sniff(**sniff_kwargs)
+            return
 
-    while not _is_stop_requested(stop_event):
-        sniff(
-            **sniff_kwargs,
-            timeout=1,
-            stop_filter=lambda _packet: _is_stop_requested(stop_event),
-        )
+        while not _is_stop_requested(stop_event):
+            sniff(
+                **sniff_kwargs,
+                timeout=1,
+                stop_filter=lambda _packet: _is_stop_requested(stop_event),
+            )
+    except Exception as error:
+        raise RuntimeError(_SNIFFING_ERROR_MESSAGE) from error

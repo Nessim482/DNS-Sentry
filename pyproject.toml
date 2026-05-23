@@ -8,7 +8,14 @@ version = "0.1.0"
 description = "Minimal DNS tunneling analysis core based on Shannon entropy."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["requests>=2.32"]
+dependencies = [
+    "python-dotenv>=1.0",
+    "requests>=2.32",
+    "scapy>=2.5",
+]
+
+[project.scripts]
+dns-sentry = "dns_sentry.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

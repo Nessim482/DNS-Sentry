@@ -169,3 +169,17 @@ def test_start_dns_sniffer_uses_dns_only_filter(monkeypatch) -> None:
     assert calls["iface"] == "Ethernet"
     assert calls["store"] is False
     assert callable(calls["prn"])
+
+
+def test_start_dns_sniffer_wraps_capture_errors(monkeypatch) -> None:
+    def fake_sniff(**kwargs: object) -> None:
+        raise OSError("driver missing")
+
+    monkeypatch.setattr(sniffer, "_load_scapy", lambda: (DNS, DNSQR, UDP, fake_sniff))
+
+    try:
+        sniffer.start_dns_sniffer(interface="invalid")
+    except RuntimeError as error:
+        assert "Live DNS sniffing requires Scapy and a packet capture driver" in str(error)
+    else:
+        raise AssertionError("capture errors should be wrapped")
