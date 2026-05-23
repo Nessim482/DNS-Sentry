@@ -46,6 +46,7 @@ def test_main_starts_sniffer_with_cli_arguments(monkeypatch, tmp_path, capsys) -
     assert "DNS-Sentry" in output
     assert "interface=Ethernet" in output
     assert "threshold=4.2" in output
+    assert "demo=False" in output
     assert "discord_webhook_configured=True" in output
     assert TEST_WEBHOOK_URL not in output
 
@@ -112,6 +113,29 @@ def test_main_handles_empty_interface(monkeypatch, tmp_path, capsys) -> None:
 
     assert cli.main(["--interface", ""]) == 1
     assert "[ERROR] interface cannot be empty" in capsys.readouterr().out
+
+
+def test_main_runs_demo_without_starting_sniffer(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    calls = {}
+
+    def fake_run_demo(**kwargs: object) -> None:
+        calls["demo"] = kwargs
+
+    def fake_start_dns_sniffer(**kwargs: object) -> None:
+        calls["sniffer"] = kwargs
+
+    monkeypatch.setattr(cli, "run_demo", fake_run_demo)
+    monkeypatch.setattr(cli, "start_dns_sniffer", fake_start_dns_sniffer)
+
+    assert cli.main(["--demo", "--threshold", "4.0", "--webhook", TEST_WEBHOOK_URL]) == 0
+    assert calls == {
+        "demo": {
+            "threshold": 4.0,
+            "webhook_url": TEST_WEBHOOK_URL,
+        }
+    }
 
 
 def test_parser_rejects_invalid_threshold() -> None:
