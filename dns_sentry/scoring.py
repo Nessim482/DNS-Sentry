@@ -117,35 +117,43 @@ def _score_reputation(
     reputation_result: dict | None,
     context: dict,
     reasons: list[str],
-) -> int:
+) -> tuple[int, dict[str, bool]]:
     reputation_data = reputation_result or {}
+    signals = {
+        "blacklisted": bool(reputation_data.get("blacklisted")),
+        "ioc_match": bool(reputation_data.get("ioc_match")),
+        "previously_quarantined": bool(context.get("previously_quarantined")),
+        "suspicious_tld": bool(reputation_data.get("suspicious_tld")),
+        "unknown_domain": bool(reputation_data.get("unknown_domain")),
+        "known_legitimate": bool(reputation_data.get("known_legitimate")),
+    }
 
     if reputation_result is None:
         reasons.append("No reputation context provided; no reputation points applied.")
 
     reputation_score = 0
 
-    if reputation_data.get("blacklisted"):
+    if signals["blacklisted"]:
         reputation_score += 30
         reasons.append("Blacklist match adds 30 reputation points.")
 
-    if reputation_data.get("ioc_match"):
+    if signals["ioc_match"]:
         reputation_score += 25
         reasons.append("Imported IOC match adds 25 reputation points.")
 
-    if context.get("previously_quarantined"):
+    if signals["previously_quarantined"]:
         reputation_score += 20
         reasons.append("Previously quarantined domain adds 20 reputation points.")
 
-    if reputation_data.get("suspicious_tld"):
-        reputation_score += 5
-        reasons.append("Suspicious TLD adds 5 reputation points.")
+    if signals["suspicious_tld"]:
+        reputation_score += 3
+        reasons.append("Suspicious TLD adds 3 weak reputation points.")
 
-    if reputation_data.get("unknown_domain"):
-        reputation_score += 5
-        reasons.append("Unknown domain adds 5 reputation points.")
+    if signals["unknown_domain"]:
+        reputation_score += 3
+        reasons.append("Unknown domain adds 3 weak reputation points.")
 
-    if reputation_data.get("known_legitimate"):
+    if signals["known_legitimate"]:
         reputation_score -= 20
         reasons.append("Known legitimate domain subtracts 20 reputation points.")
 
@@ -153,15 +161,27 @@ def _score_reputation(
     if capped_score != reputation_score:
         reasons.append("Reputation score capped at 30 points.")
 
-    return capped_score
+    return capped_score, signals
 
 
-def _score_structure(domain: str, threshold: float, reasons: list[str]) -> int:
+def _score_structure(
+    domain: str,
+    threshold: float,
+    reasons: list[str],
+) -> tuple[int, dict[str, bool]]:
     labels = _scored_labels(domain)
     structure_score = 0
+    signals = {
+        "high_entropy": False,
+        "long_domain": False,
+        "high_digit_symbol_ratio": False,
+        "low_vowel_ratio": False,
+        "encoded_pattern": False,
+    }
 
     highest_entropy = max((shannon_entropy(label) for label in labels), default=0.0)
     if highest_entropy >= threshold:
+        signals["high_entropy"] = True
         structure_score += 10
         reasons.append("High Shannon entropy adds 10 structure points.")
 
@@ -171,22 +191,26 @@ def _score_structure(domain: str, threshold: float, reasons: list[str]) -> int:
         or len(subdomain) >= 40
         or any(len(label) >= 30 for label in labels)
     ):
+        signals["long_domain"] = True
         structure_score += 5
         reasons.append("Long domain or subdomain adds 5 structure points.")
 
     if _has_high_digit_symbol_ratio(labels):
+        signals["high_digit_symbol_ratio"] = True
         structure_score += 4
         reasons.append("High digit/symbol ratio adds 4 structure points.")
 
     if _has_low_vowel_ratio(labels):
+        signals["low_vowel_ratio"] = True
         structure_score += 3
         reasons.append("Low vowel/readability ratio adds 3 structure points.")
 
     if _has_encoded_pattern(labels):
+        signals["encoded_pattern"] = True
         structure_score += 3
         reasons.append("Possible base64/base32/hex pattern adds 3 structure points.")
 
-    return min(structure_score, STRUCTURE_MAX_SCORE)
+    return min(structure_score, STRUCTURE_MAX_SCORE), signals
 
 
 def _has_unusual_record_type(telemetry_result: dict) -> bool:
@@ -218,54 +242,132 @@ def _has_unusual_record_type(telemetry_result: dict) -> bool:
     return any(normalized_record_types.get(record_type, 0) for record_type in ("TXT", "NULL"))
 
 
-def _score_behavior(telemetry_result: dict | None, reasons: list[str]) -> int:
+def _score_behavior(
+    telemetry_result: dict | None,
+    reasons: list[str],
+) -> tuple[int, dict[str, bool]]:
+    signals = {
+        "repeated_queries": False,
+        "many_unique_subdomains": False,
+        "high_nxdomain_ratio": False,
+        "possible_beaconing": False,
+        "unusual_record_type": False,
+    }
+
     if telemetry_result is None:
         reasons.append(
             "DNS behavior context was not provided; no behavior points applied."
         )
-        return 0
+        return 0, signals
 
     behavior_score = 0
 
     if telemetry_result.get("repeated_queries"):
+        signals["repeated_queries"] = True
         behavior_score += 10
         reasons.append("Repeated queries add 10 behavior points.")
 
     if telemetry_result.get("many_unique_subdomains"):
+        signals["many_unique_subdomains"] = True
         behavior_score += 8
         reasons.append("Many unique subdomains add 8 behavior points.")
 
     if telemetry_result.get("high_nxdomain_ratio"):
+        signals["high_nxdomain_ratio"] = True
         behavior_score += 7
         reasons.append("High NXDOMAIN ratio adds 7 behavior points.")
 
     if telemetry_result.get("possible_beaconing"):
+        signals["possible_beaconing"] = True
         behavior_score += 5
         reasons.append("Possible beaconing adds 5 behavior points.")
 
     if _has_unusual_record_type(telemetry_result):
+        signals["unusual_record_type"] = True
         behavior_score += 5
         reasons.append("Unusual DNS record type adds 5 behavior points.")
 
-    return min(behavior_score, BEHAVIOR_MAX_SCORE)
+    return min(behavior_score, BEHAVIOR_MAX_SCORE), signals
 
 
-def _score_context(context: dict, reasons: list[str]) -> int:
+def _score_context(context: dict, reasons: list[str]) -> tuple[int, dict[str, bool]]:
     context_score = 0
+    signals = {
+        "sensitive_host": False,
+        "unusual_activity_time": False,
+        "frequently_seen_benign": False,
+    }
 
     if context.get("sensitive_host"):
+        signals["sensitive_host"] = True
         context_score += 5
         reasons.append("Sensitive host adds 5 context points.")
 
     if context.get("unusual_activity_time"):
+        signals["unusual_activity_time"] = True
         context_score += 5
         reasons.append("Unusual activity time adds 5 context points.")
 
     if context.get("frequently_seen_benign"):
+        signals["frequently_seen_benign"] = True
         context_score -= 10
         reasons.append("Frequently seen benign domain subtracts 10 context points.")
 
-    return _clamp(context_score, -10, CONTEXT_MAX_SCORE)
+    return _clamp(context_score, -10, CONTEXT_MAX_SCORE), signals
+
+
+def _apply_false_positive_guardrails(
+    score: int,
+    reputation_signals: dict[str, bool],
+    structure_signals: dict[str, bool],
+    behavior_signals: dict[str, bool],
+    context_signals: dict[str, bool],
+    reasons: list[str],
+) -> int:
+    strong_reputation = any(
+        reputation_signals[name]
+        for name in ("blacklisted", "ioc_match", "previously_quarantined")
+    )
+    weak_reputation = any(
+        reputation_signals[name]
+        for name in ("suspicious_tld", "unknown_domain")
+    )
+    structure_signal = any(structure_signals.values())
+    behavior_signal = any(behavior_signals.values())
+    context_signal = any(
+        context_signals[name] for name in ("sensitive_host", "unusual_activity_time")
+    )
+
+    if weak_reputation and not any(
+        [strong_reputation, structure_signal, behavior_signal, context_signal]
+    ):
+        reasons.append("Weak reputation signal only; no alert escalation applied.")
+
+    if (
+        reputation_signals["known_legitimate"]
+        and not strong_reputation
+        and score > 74
+    ):
+        reasons.append(
+            "Known legitimate guardrail caps score at 74 without high-confidence reputation."
+        )
+        score = 74
+
+    if score >= 90 and not (
+        strong_reputation and behavior_signal and structure_signal
+    ):
+        reasons.append(
+            "Critical guardrail caps score at 89 unless reputation, behavior, and structure signals agree."
+        )
+        score = 89
+
+    if score >= 75 and not (strong_reputation and behavior_signal):
+        reasons.append(
+            "Quarantine guardrail caps score at 74 without high-confidence reputation plus behavior."
+        )
+        score = 74
+
+    return score
 
 
 def score_domain(
@@ -291,15 +393,31 @@ def score_domain(
             ],
         }
 
-    reputation_score = _score_reputation(reputation_result, context_data, reasons)
-    structure_score = _score_structure(normalized_domain, threshold, reasons)
-    behavior_score = _score_behavior(telemetry_result, reasons)
-    context_score = _score_context(context_data, reasons)
+    reputation_score, reputation_signals = _score_reputation(
+        reputation_result,
+        context_data,
+        reasons,
+    )
+    structure_score, structure_signals = _score_structure(
+        normalized_domain,
+        threshold,
+        reasons,
+    )
+    behavior_score, behavior_signals = _score_behavior(telemetry_result, reasons)
+    context_score, context_signals = _score_context(context_data, reasons)
 
     raw_score = reputation_score + structure_score + behavior_score + context_score
     risk_score = _clamp(raw_score, 0, 100)
     if risk_score != raw_score:
         reasons.append(f"Final score clamped from {raw_score} to {risk_score}.")
+    risk_score = _apply_false_positive_guardrails(
+        risk_score,
+        reputation_signals,
+        structure_signals,
+        behavior_signals,
+        context_signals,
+        reasons,
+    )
 
     severity, action = _severity_and_action(risk_score)
 
