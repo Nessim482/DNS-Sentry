@@ -71,6 +71,10 @@ def _format_top_reasons(reasons: object) -> str:
     return "\n".join(f"- {reason}" for reason in safe_reasons)
 
 
+def _format_bool(value: object) -> str:
+    return "Yes" if bool(value) else "No"
+
+
 def _build_discord_payload(result: dict, timestamp: str) -> dict[str, object]:
     domain = str(result["domain"])
     subdomain = str(result.get("subdomain") or "N/A")
@@ -102,6 +106,16 @@ def _build_discord_payload(result: dict, timestamp: str) -> dict[str, object]:
                     },
                     {"name": "Severity", "value": severity, "inline": True},
                     {"name": "Action", "value": action, "inline": True},
+                    {
+                        "name": "Quarantine",
+                        "value": _format_bool(result.get("quarantined")),
+                        "inline": True,
+                    },
+                    {
+                        "name": "Containment Required",
+                        "value": _format_bool(result.get("containment_required")),
+                        "inline": True,
+                    },
                     {
                         "name": "Top Reasons",
                         "value": _format_top_reasons(result.get("reasons")),
