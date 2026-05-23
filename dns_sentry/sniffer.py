@@ -70,6 +70,18 @@ def _extract_query_domain(
     return str(query_name).rstrip(".").lower()
 
 
+def _is_stop_requested(stop_event: object | None) -> bool:
+    if stop_event is None:
+        return False
+
+    is_set = getattr(stop_event, "is_set", None)
+
+    if is_set is None:
+        return False
+
+    return bool(is_set())
+
+
 def _handle_dns_packet(
     packet: object,
     dns_layer: object,
@@ -116,6 +128,7 @@ def start_dns_sniffer(
     webhook_url: str | None = None,
     threshold: float | None = None,
     debug: bool | None = None,
+    stop_event: object | None = None,
 ) -> None:
     """Start a minimal DNS-only sniffer for outgoing DNS queries."""
     dns_layer, dns_query_layer, udp_layer, sniff = _load_scapy()
@@ -127,7 +140,16 @@ def start_dns_sniffer(
         threshold if threshold is not None else load_dns_entropy_threshold()
     )
     effective_debug = debug if debug is not None else load_dns_debug()
-    setup_logging(debug=bool(effective_debug))
+    logger = logging.getLogger(LOGGER_NAME)
+
+    if logger.handlers:
+        level = logging.DEBUG if effective_debug else logging.INFO
+        logger.setLevel(level)
+
+        for handler in logger.handlers:
+            handler.setLevel(level)
+    else:
+        setup_logging(debug=bool(effective_debug))
 
     if effective_debug:
         _LOGGER.debug("DNS sniffer filter=%s", _DNS_CAPTURE_FILTER)
@@ -148,4 +170,13 @@ def start_dns_sniffer(
     if effective_interface is not None:
         sniff_kwargs["iface"] = effective_interface
 
-    sniff(**sniff_kwargs)
+    if stop_event is None:
+        sniff(**sniff_kwargs)
+        return
+
+    while not _is_stop_requested(stop_event):
+        sniff(
+            **sniff_kwargs,
+            timeout=1,
+            stop_filter=lambda _packet: _is_stop_requested(stop_event),
+        )
