@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from queue import Empty, Queue
+import sys
 from threading import Event, Thread
 import tkinter as tk
 from tkinter import scrolledtext, ttk
@@ -19,6 +21,8 @@ from .logging_config import LOGGER_NAME, mask_sensitive_text, setup_logging
 from .sniffer import start_dns_sniffer
 
 DEFAULT_GUI_THRESHOLD = 4.0
+ICON_RELATIVE_PATH = Path("assets") / "dns-sentry.ico"
+WINDOWS_APP_USER_MODEL_ID = "DNS-Sentry.Desktop"
 
 
 class _GuiLogHandler(logging.Handler):
@@ -49,6 +53,47 @@ def _resolve_webhook(entry_value: str) -> str | None:
     return _clean_optional_text(entry_value) or load_discord_webhook_url()
 
 
+def _project_root() -> Path:
+    bundle_path = getattr(sys, "_MEIPASS", None)
+    if bundle_path:
+        return Path(bundle_path)
+
+    return Path(__file__).resolve().parent.parent
+
+
+def resolve_icon_path() -> Path | None:
+    icon_path = _project_root() / ICON_RELATIVE_PATH
+    if icon_path.is_file():
+        return icon_path
+
+    return None
+
+
+def _apply_window_icon(root: tk.Tk) -> None:
+    icon_path = resolve_icon_path()
+    if icon_path is None:
+        return
+
+    try:
+        root.iconbitmap(default=str(icon_path))
+    except tk.TclError:
+        return
+
+
+def _configure_windows_taskbar_icon() -> None:
+    if sys.platform != "win32":
+        return
+
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            WINDOWS_APP_USER_MODEL_ID
+        )
+    except (AttributeError, OSError):
+        return
+
+
 def _configure_gui_logging(log_queue: Queue[str], debug: bool) -> logging.Logger:
     logger = setup_logging(debug=debug)
     handler = _GuiLogHandler(log_queue)
@@ -59,8 +104,10 @@ def _configure_gui_logging(log_queue: Queue[str], debug: bool) -> logging.Logger
 
 def run_gui() -> None:
     """Run the DNS-Sentry Tkinter dashboard."""
+    _configure_windows_taskbar_icon()
     root = tk.Tk()
     root.title("DNS-Sentry")
+    _apply_window_icon(root)
     root.geometry("820x560")
     root.minsize(720, 500)
 
