@@ -1,4 +1,5 @@
 from dns_sentry import alerts
+from dns_sentry.logging_config import setup_logging
 
 TEST_WEBHOOK_URL = "https://example.test/webhook"
 
@@ -107,8 +108,9 @@ def test_send_discord_alert_handles_network_error(monkeypatch) -> None:
     )
 
 
-def test_send_discord_alert_handles_invalid_webhook_response(monkeypatch) -> None:
+def test_send_discord_alert_handles_invalid_webhook_response(monkeypatch, capsys) -> None:
     alerts._RECENT_ALERTS.clear()
+    setup_logging()
 
     def fake_post(*args: object, **kwargs: object) -> FakeResponse:
         return FakeResponse(404)
@@ -122,6 +124,10 @@ def test_send_discord_alert_handles_invalid_webhook_response(monkeypatch) -> Non
         )
         is False
     )
+    output = capsys.readouterr().out
+
+    assert "Discord alert failed: webhook returned status=404" in output
+    assert TEST_WEBHOOK_URL not in output
 
 
 def test_send_discord_alert_suppresses_duplicate_alerts(monkeypatch) -> None:
