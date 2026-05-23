@@ -60,8 +60,65 @@ def test_send_discord_alert_posts_payload(monkeypatch) -> None:
     assert fields["Entropy"] == "4.20"
     assert fields["Threshold"] == "3.50"
     assert fields["Detection"] == "High"
+    assert fields["Risk Score"] == "N/A"
+    assert fields["Severity"] == "High"
+    assert fields["Action"] == "alert"
+    assert fields["Top Reasons"] == "N/A"
     assert fields["Timestamp UTC"].endswith("Z")
     assert TEST_WEBHOOK_URL not in str(payload)
+
+
+def test_discord_payload_includes_scoring_fields(monkeypatch) -> None:
+    result = suspicious_result()
+    result.update(
+        {
+            "risk_score": 55,
+            "severity": "Suspicious",
+            "action": "alert",
+            "reasons": [
+                "Blacklist match adds 30 reputation points.",
+                "Repeated queries add 10 behavior points.",
+                f"webhook={TEST_WEBHOOK_URL}",
+                "extra reason should not be included",
+            ],
+        }
+    )
+
+    payload = captured_payload(monkeypatch, result)
+    fields = field_map(payload)
+
+    assert fields["Risk Score"] == "55"
+    assert fields["Severity"] == "Suspicious"
+    assert fields["Action"] == "alert"
+    assert "Blacklist match adds 30 reputation points." in fields["Top Reasons"]
+    assert "Repeated queries add 10 behavior points." in fields["Top Reasons"]
+    assert "webhook=[redacted]" in fields["Top Reasons"]
+    assert "extra reason should not be included" not in fields["Top Reasons"]
+    assert TEST_WEBHOOK_URL not in str(payload)
+
+
+def test_should_send_discord_alert_uses_scored_actions() -> None:
+    assert alerts.should_send_discord_alert("allow") is False
+    assert alerts.should_send_discord_alert("log") is False
+    assert alerts.should_send_discord_alert("alert") is True
+    assert alerts.should_send_discord_alert("strong_alert") is True
+    assert alerts.should_send_discord_alert("quarantine") is True
+    assert alerts.should_send_discord_alert("quarantine_and_containment") is True
+
+
+def test_send_discord_alert_skips_allow_and_log_actions(monkeypatch) -> None:
+    def fake_post(*args: object, **kwargs: object) -> FakeResponse:
+        raise AssertionError("HTTP must not be called for allow/log actions")
+
+    monkeypatch.setattr(alerts.requests, "post", fake_post)
+
+    allow_result = suspicious_result()
+    allow_result["action"] = "allow"
+    log_result = suspicious_result()
+    log_result["action"] = "log"
+
+    assert alerts.send_discord_alert(allow_result, TEST_WEBHOOK_URL) is False
+    assert alerts.send_discord_alert(log_result, TEST_WEBHOOK_URL) is False
 
 
 def test_send_discord_alert_uses_medium_severity(monkeypatch) -> None:
