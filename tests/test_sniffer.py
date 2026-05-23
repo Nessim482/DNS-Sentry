@@ -85,6 +85,35 @@ def test_handle_dns_packet_prints_alert_for_suspicious_domain(capsys) -> None:
     assert output.startswith("[ALERT] dghpcy1sb29rcy1sawtllwjhc2u2nc1kyxrh.attacker.com")
 
 
+def test_handle_dns_packet_sends_alert_only_when_suspicious(monkeypatch) -> None:
+    sent_alerts = []
+
+    def fake_send_discord_alert(result: dict, webhook_url: str) -> bool:
+        sent_alerts.append((result, webhook_url))
+        return True
+
+    monkeypatch.setattr(sniffer, "send_discord_alert", fake_send_discord_alert)
+
+    sniffer._handle_dns_packet(
+        make_dns_query_packet(b"google.com."),
+        DNS,
+        DNSQR,
+        UDP,
+        webhook_url="https://discord.com/api/webhooks/example",
+    )
+    sniffer._handle_dns_packet(
+        make_dns_query_packet("dGhpcy1sb29rcy1saWtlLWJhc2U2NC1kYXRh.attacker.com."),
+        DNS,
+        DNSQR,
+        UDP,
+        webhook_url="https://discord.com/api/webhooks/example",
+    )
+
+    assert len(sent_alerts) == 1
+    assert sent_alerts[0][0]["suspicious"] is True
+    assert sent_alerts[0][1] == "https://discord.com/api/webhooks/example"
+
+
 def test_start_dns_sniffer_uses_dns_only_filter(monkeypatch) -> None:
     calls = {}
 
