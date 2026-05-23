@@ -2,6 +2,7 @@
 
 import argparse
 from collections.abc import Sequence
+import importlib.util
 
 from .config import (
     load_discord_webhook_url,
@@ -14,6 +15,12 @@ from .demo import run_demo
 from .gui import run_gui
 from .logging_config import setup_logging
 from .sniffer import start_dns_sniffer
+
+_CHECK_ENV_MODULES = {
+    "Scapy": "scapy",
+    "requests": "requests",
+    "python-dotenv": "dotenv",
+}
 
 
 def _non_negative_float(value: str) -> float:
@@ -56,8 +63,46 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run the minimal Tkinter desktop interface",
     )
+    parser.add_argument(
+        "--check-env",
+        action="store_true",
+        help="check dependencies and configuration without sniffing",
+    )
 
     return parser
+
+
+def _is_module_importable(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def check_environment() -> bool:
+    """Check runtime dependencies and config loading without network sniffing."""
+    logger = setup_logging()
+    ok = True
+
+    for label, module_name in _CHECK_ENV_MODULES.items():
+        if _is_module_importable(module_name):
+            logger.info("%s importable", label)
+        else:
+            logger.error("%s is not importable", label)
+            ok = False
+
+    try:
+        load_env_file()
+        load_discord_webhook_url()
+        load_dns_entropy_threshold()
+        load_dns_interface()
+        load_dns_debug()
+        build_parser()
+    except (OSError, ValueError) as error:
+        logger.error("Environment check failed: %s", error)
+        ok = False
+    else:
+        logger.info("Configuration loadable")
+        logger.info("CLI functional")
+
+    return ok
 
 
 def _resolve_cli_config(args: argparse.Namespace) -> dict[str, str | float | bool | None]:
@@ -110,6 +155,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     logger = setup_logging()
 
     try:
+        if args.check_env:
+            return 0 if check_environment() else 1
+
         if args.gui:
             run_gui()
             return 0
