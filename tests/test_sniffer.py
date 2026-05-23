@@ -1,5 +1,7 @@
 from dns_sentry import sniffer
 
+TEST_WEBHOOK_URL = "https://example.test/webhook"
+
 
 class DNS:
     pass
@@ -99,19 +101,19 @@ def test_handle_dns_packet_sends_alert_only_when_suspicious(monkeypatch) -> None
         DNS,
         DNSQR,
         UDP,
-        webhook_url="https://discord.com/api/webhooks/example",
+        webhook_url=TEST_WEBHOOK_URL,
     )
     sniffer._handle_dns_packet(
         make_dns_query_packet("dGhpcy1sb29rcy1saWtlLWJhc2U2NC1kYXRh.attacker.com."),
         DNS,
         DNSQR,
         UDP,
-        webhook_url="https://discord.com/api/webhooks/example",
+        webhook_url=TEST_WEBHOOK_URL,
     )
 
     assert len(sent_alerts) == 1
     assert sent_alerts[0][0]["suspicious"] is True
-    assert sent_alerts[0][1] == "https://discord.com/api/webhooks/example"
+    assert sent_alerts[0][1] == TEST_WEBHOOK_URL
 
 
 def test_start_dns_sniffer_uses_dns_only_filter(monkeypatch) -> None:

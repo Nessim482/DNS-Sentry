@@ -1,5 +1,7 @@
 from dns_sentry import alerts
 
+TEST_WEBHOOK_URL = "https://example.test/webhook"
+
 
 class FakeResponse:
     def __init__(self, status_code: int) -> None:
@@ -30,13 +32,13 @@ def test_send_discord_alert_posts_payload(monkeypatch) -> None:
 
     success = alerts.send_discord_alert(
         suspicious_result(),
-        "https://discord.com/api/webhooks/example",
+        TEST_WEBHOOK_URL,
     )
 
     content = calls["json"]["content"]
 
     assert success is True
-    assert calls["url"] == "https://discord.com/api/webhooks/example"
+    assert calls["url"] == TEST_WEBHOOK_URL
     assert calls["timeout"] == 3.0
     assert "domain: dghpcy1sb29rcy1sawtllwjhc2u2nc1kyxrh.attacker.com" in content
     assert "entropy: 4.20" in content
@@ -67,7 +69,7 @@ def test_send_discord_alert_handles_timeout(monkeypatch) -> None:
     assert (
         alerts.send_discord_alert(
             suspicious_result(),
-            "https://discord.com/api/webhooks/example",
+            TEST_WEBHOOK_URL,
         )
         is False
     )
@@ -84,7 +86,7 @@ def test_send_discord_alert_handles_network_error(monkeypatch) -> None:
     assert (
         alerts.send_discord_alert(
             suspicious_result(),
-            "https://discord.com/api/webhooks/example",
+            TEST_WEBHOOK_URL,
         )
         is False
     )
@@ -101,7 +103,7 @@ def test_send_discord_alert_handles_invalid_webhook_response(monkeypatch) -> Non
     assert (
         alerts.send_discord_alert(
             suspicious_result(),
-            "https://discord.com/api/webhooks/example",
+            TEST_WEBHOOK_URL,
         )
         is False
     )
@@ -118,8 +120,6 @@ def test_send_discord_alert_suppresses_duplicate_alerts(monkeypatch) -> None:
     monkeypatch.setattr(alerts.requests, "post", fake_post)
     monkeypatch.setattr(alerts, "monotonic", lambda: 100.0)
 
-    webhook_url = "https://discord.com/api/webhooks/example"
-
-    assert alerts.send_discord_alert(suspicious_result(), webhook_url) is True
-    assert alerts.send_discord_alert(suspicious_result(), webhook_url) is False
+    assert alerts.send_discord_alert(suspicious_result(), TEST_WEBHOOK_URL) is True
+    assert alerts.send_discord_alert(suspicious_result(), TEST_WEBHOOK_URL) is False
     assert len(calls) == 1
