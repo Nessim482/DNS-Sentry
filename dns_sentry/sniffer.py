@@ -15,6 +15,7 @@ from .config import (
 )
 from .logging_config import LOGGER_NAME, setup_logging
 from .parser import parse_dns_query
+from .quarantine import apply_action
 from .reputation import check_reputation, load_domain_list
 from .scoring import score_domain
 from .telemetry import analyze_behavior, get_domain_stats, record_query
@@ -178,6 +179,36 @@ def _enrich_with_scoring(
     return enriched_result
 
 
+def _enrich_with_action_decision(result: dict) -> dict:
+    try:
+        action_result = apply_action(result)
+    except Exception:
+        _LOGGER.warning("DNS action decision failed for domain=%s", result["domain"])
+        enriched_result = dict(result)
+        enriched_result.update(
+            {
+                "applied": False,
+                "quarantined": False,
+                "containment_required": False,
+                "quarantine_message": "Logical quarantine decision unavailable.",
+            }
+        )
+        return enriched_result
+
+    enriched_result = dict(result)
+    enriched_result.update(
+        {
+            "domain": action_result["domain"],
+            "action": action_result["action"],
+            "applied": action_result["applied"],
+            "quarantined": action_result["quarantined"],
+            "containment_required": action_result["containment_required"],
+            "quarantine_message": action_result["message"],
+        }
+    )
+    return enriched_result
+
+
 def _log_dns_result(result: dict) -> None:
     log_values = (
         result["domain"],
@@ -186,19 +217,25 @@ def _log_dns_result(result: dict) -> None:
         result.get("risk_score", "N/A"),
         result.get("severity", "N/A"),
         result.get("action", "N/A"),
+        result.get("applied", "N/A"),
+        result.get("quarantined", "N/A"),
+        result.get("containment_required", "N/A"),
+        result.get("quarantine_message", "N/A"),
     )
 
     if result["suspicious"] or should_send_discord_alert(result.get("action")):
         _LOGGER.warning(
             "Suspicious DNS query detected domain=%s entropy=%.1f "
-            "suspicious=%s risk_score=%s severity=%s action=%s",
+            "suspicious=%s risk_score=%s severity=%s action=%s applied=%s "
+            "quarantined=%s containment_required=%s quarantine_message=%s",
             *log_values,
         )
         return
 
     _LOGGER.info(
         "DNS query observed domain=%s entropy=%.1f suspicious=%s "
-        "risk_score=%s severity=%s action=%s",
+        "risk_score=%s severity=%s action=%s applied=%s quarantined=%s "
+        "containment_required=%s quarantine_message=%s",
         *log_values,
     )
 
@@ -243,6 +280,7 @@ def _handle_dns_packet(
         reputation_result=reputation_result,
         threshold=threshold,
     )
+    result = _enrich_with_action_decision(result)
 
     _log_dns_result(result)
 

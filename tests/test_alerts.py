@@ -75,6 +75,8 @@ def test_discord_payload_includes_scoring_fields(monkeypatch) -> None:
             "risk_score": 55,
             "severity": "Suspicious",
             "action": "alert",
+            "quarantined": True,
+            "containment_required": False,
             "reasons": [
                 "Blacklist match adds 30 reputation points.",
                 "Repeated queries add 10 behavior points.",
@@ -90,11 +92,34 @@ def test_discord_payload_includes_scoring_fields(monkeypatch) -> None:
     assert fields["Risk Score"] == "55"
     assert fields["Severity"] == "Suspicious"
     assert fields["Action"] == "alert"
+    assert fields["Quarantine"] == "Yes"
+    assert fields["Containment Required"] == "No"
     assert "Blacklist match adds 30 reputation points." in fields["Top Reasons"]
     assert "Repeated queries add 10 behavior points." in fields["Top Reasons"]
     assert "webhook=[redacted]" in fields["Top Reasons"]
     assert "extra reason should not be included" not in fields["Top Reasons"]
     assert TEST_WEBHOOK_URL not in str(payload)
+
+
+def test_discord_payload_includes_containment_required(monkeypatch) -> None:
+    result = suspicious_result()
+    result.update(
+        {
+            "risk_score": 95,
+            "severity": "Critical",
+            "action": "quarantine_and_containment",
+            "quarantined": True,
+            "containment_required": True,
+            "reasons": ["Critical score requires containment."],
+        }
+    )
+
+    payload = captured_payload(monkeypatch, result)
+    fields = field_map(payload)
+
+    assert fields["Action"] == "quarantine_and_containment"
+    assert fields["Quarantine"] == "Yes"
+    assert fields["Containment Required"] == "Yes"
 
 
 def test_should_send_discord_alert_uses_scored_actions() -> None:
