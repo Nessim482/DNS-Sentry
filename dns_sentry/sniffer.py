@@ -217,23 +217,25 @@ def _log_dns_result(result: dict) -> None:
         result.get("risk_score", "N/A"),
         result.get("severity", "N/A"),
         result.get("action", "N/A"),
+        result.get("applied", "N/A"),
         result.get("quarantined", "N/A"),
         result.get("containment_required", "N/A"),
+        result.get("quarantine_message", "N/A"),
     )
 
     if result["suspicious"] or should_send_discord_alert(result.get("action")):
         _LOGGER.warning(
             "Suspicious DNS query detected domain=%s entropy=%.1f "
-            "suspicious=%s risk_score=%s severity=%s action=%s "
-            "quarantined=%s containment_required=%s",
+            "suspicious=%s risk_score=%s severity=%s action=%s applied=%s "
+            "quarantined=%s containment_required=%s quarantine_message=%s",
             *log_values,
         )
         return
 
     _LOGGER.info(
         "DNS query observed domain=%s entropy=%.1f suspicious=%s "
-        "risk_score=%s severity=%s action=%s quarantined=%s "
-        "containment_required=%s",
+        "risk_score=%s severity=%s action=%s applied=%s quarantined=%s "
+        "containment_required=%s quarantine_message=%s",
         *log_values,
     )
 

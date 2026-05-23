@@ -7,6 +7,7 @@ TEST_WEBHOOK_URL = "https://example.test/webhook"
 def test_run_demo_analyzes_simulated_domains(monkeypatch) -> None:
     analyzed_domains = []
     scored_domains = []
+    action_domains = []
 
     def fake_analyze_domain(domain: str, threshold: float) -> dict[str, str | float | bool]:
         analyzed_domains.append((domain, threshold))
@@ -34,13 +35,27 @@ def test_run_demo_analyzes_simulated_domains(monkeypatch) -> None:
             "reasons": ["forced allow action for test"],
         }
 
+    def fake_apply_action(result: dict) -> dict:
+        action_domains.append(result["domain"])
+        return {
+            "domain": result["domain"],
+            "action": result["action"],
+            "applied": True,
+            "quarantined": False,
+            "containment_required": False,
+            "message": "Domain allowed by policy.",
+            "reasons": result["reasons"],
+        }
+
     monkeypatch.setattr(demo, "analyze_domain", fake_analyze_domain)
     monkeypatch.setattr(demo, "score_domain", fake_score_domain)
+    monkeypatch.setattr(demo, "apply_action", fake_apply_action)
 
     demo.run_demo(threshold=4.0)
 
     assert len(analyzed_domains) == len(demo._DEMO_DOMAINS)
     assert len(scored_domains) == len(demo._DEMO_DOMAINS)
+    assert len(action_domains) == len(demo._DEMO_DOMAINS)
     assert all(threshold == 4.0 for _, threshold in analyzed_domains)
     assert all(threshold == 4.0 for _, threshold, _, _ in scored_domains)
 

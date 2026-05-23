@@ -104,14 +104,16 @@ def _enrich_with_action_decision(result: dict) -> dict:
 
 def _enrich_demo_result(result: dict, threshold: float) -> dict:
     domain = str(result["domain"])
+    telemetry_result = _DEMO_BEHAVIOR_OVERRIDES.get(domain, {})
+    context = _DEMO_CONTEXT_OVERRIDES.get(domain, {})
 
     try:
         scoring_result = score_domain(
             domain,
             threshold=threshold,
-            telemetry_result=_DEMO_BEHAVIOR_OVERRIDES.get(domain, {}),
+            telemetry_result=telemetry_result,
             reputation_result=_build_reputation_result(domain),
-            context=_DEMO_CONTEXT_OVERRIDES.get(domain, {}),
+            context=context,
         )
     except Exception:
         _LOGGER.warning("DNS scoring failed for demo domain=%s", result["domain"])
@@ -169,16 +171,18 @@ def run_demo(
         if result["suspicious"] or should_send_discord_alert(result.get("action")):
             _LOGGER.warning(
                 "ALERT demo DNS query domain=%s entropy=%.1f suspicious=%s "
-                "risk_score=%s severity=%s action=%s quarantined=%s "
-                "containment_required=%s",
+                "risk_score=%s severity=%s action=%s applied=%s quarantined=%s "
+                "containment_required=%s quarantine_message=%s",
                 result["domain"],
                 result["entropy"],
                 result["suspicious"],
                 result.get("risk_score", "N/A"),
                 result.get("severity", "N/A"),
                 result.get("action", "N/A"),
+                result.get("applied", "N/A"),
                 result.get("quarantined", "N/A"),
                 result.get("containment_required", "N/A"),
+                result.get("quarantine_message", "N/A"),
             )
             _notify_result_callback(result, result_callback)
 
@@ -189,16 +193,18 @@ def run_demo(
         else:
             _LOGGER.info(
                 "INFO demo DNS query domain=%s entropy=%.1f suspicious=%s "
-                "risk_score=%s severity=%s action=%s quarantined=%s "
-                "containment_required=%s",
+                "risk_score=%s severity=%s action=%s applied=%s quarantined=%s "
+                "containment_required=%s quarantine_message=%s",
                 result["domain"],
                 result["entropy"],
                 result["suspicious"],
                 result.get("risk_score", "N/A"),
                 result.get("severity", "N/A"),
                 result.get("action", "N/A"),
+                result.get("applied", "N/A"),
                 result.get("quarantined", "N/A"),
                 result.get("containment_required", "N/A"),
+                result.get("quarantine_message", "N/A"),
             )
             _notify_result_callback(result, result_callback)
 

@@ -86,6 +86,7 @@ def test_handle_dns_packet_prints_info_for_normal_domain(capsys) -> None:
     assert result["risk_score"] == 0
     assert result["severity"] == "Safe"
     assert result["action"] == "allow"
+    assert result["applied"] is True
     assert result["quarantined"] is False
     assert result["containment_required"] is False
     assert (
@@ -159,12 +160,14 @@ def test_handle_dns_packet_passes_telemetry_and_reputation_to_scoring(monkeypatc
     assert result["risk_score"] == 45
     assert result["severity"] == "Suspicious"
     assert result["action"] == "alert"
+    assert result["applied"] is True
     assert result["quarantined"] is False
     assert result["containment_required"] is False
 
 
 def test_handle_dns_packet_notifies_result_callback(monkeypatch) -> None:
     results = []
+
 
     def fake_score_domain(
         domain: str,
@@ -196,6 +199,53 @@ def test_handle_dns_packet_notifies_result_callback(monkeypatch) -> None:
     assert len(results) == 1
     assert results[0]["domain"] == "quarantine.example.com"
     assert results[0]["quarantined"] is True
+
+
+def test_handle_dns_packet_calls_apply_action(monkeypatch) -> None:
+    captured = {}
+
+    def fake_score_domain(
+        domain: str,
+        threshold: float,
+        telemetry_result: dict,
+        reputation_result: dict,
+    ) -> dict:
+        return {
+            "domain": domain,
+            "risk_score": 75,
+            "severity": "Dangerous",
+            "action": "quarantine",
+            "reasons": ["forced quarantine action for test"],
+        }
+
+    def fake_apply_action(result: dict) -> dict:
+        captured["result"] = dict(result)
+        return {
+            "domain": result["domain"],
+            "action": result["action"],
+            "applied": True,
+            "quarantined": True,
+            "containment_required": False,
+            "message": "Logical quarantine applied.",
+            "reasons": result["reasons"],
+        }
+
+    monkeypatch.setattr(sniffer, "score_domain", fake_score_domain)
+    monkeypatch.setattr(sniffer, "apply_action", fake_apply_action)
+
+    result = sniffer._handle_dns_packet(
+        make_dns_query_packet(b"quarantine.example.com."),
+        DNS,
+        DNSQR,
+        UDP,
+    )
+
+    assert result is not None
+    assert captured["result"]["action"] == "quarantine"
+    assert result["applied"] is True
+    assert result["quarantined"] is True
+    assert result["containment_required"] is False
+    assert result["quarantine_message"] == "Logical quarantine applied."
 
 
 def test_handle_dns_packet_does_not_send_discord_for_allow_or_log(monkeypatch) -> None:
@@ -281,6 +331,7 @@ def test_handle_dns_packet_sends_discord_for_alert_actions(monkeypatch, action) 
     assert result["action"] == action
     assert len(sent_alerts) == 1
     assert sent_alerts[0][0]["action"] == action
+    assert sent_alerts[0][0]["applied"] is True
     assert sent_alerts[0][1] == TEST_WEBHOOK_URL
 
     if action == "quarantine":
