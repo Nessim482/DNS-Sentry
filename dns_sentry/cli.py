@@ -10,6 +10,7 @@ from .config import (
     load_dns_interface,
     load_env_file,
 )
+from .logging_config import setup_logging
 from .sniffer import start_dns_sniffer
 
 
@@ -68,25 +69,30 @@ def _resolve_cli_config(args: argparse.Namespace) -> dict[str, str | float | boo
     }
 
 
-def _print_startup(config: dict[str, str | float | bool | None]) -> None:
+def _log_startup(config: dict[str, str | float | bool | None]) -> None:
+    logger = setup_logging(debug=bool(config["debug"]))
     interface = config["interface"] or "auto"
     webhook_enabled = config["webhook_url"] is not None
 
-    print("DNS-Sentry")
-    print(f"interface={interface}")
-    print(f"threshold={config['threshold']}")
-    print(f"debug={config['debug']}")
-    print(f"discord_webhook_configured={webhook_enabled}")
-    print("[INFO] starting DNS sniffer")
+    logger.info("DNS-Sentry starting")
+    logger.info(
+        "configuration interface=%s threshold=%s debug=%s discord_webhook_configured=%s",
+        interface,
+        config["threshold"],
+        config["debug"],
+        webhook_enabled,
+    )
+    logger.info("Starting DNS sniffer")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    logger = setup_logging()
 
     try:
         config = _resolve_cli_config(args)
-        _print_startup(config)
+        _log_startup(config)
         start_dns_sniffer(
             interface=config["interface"],  # type: ignore[arg-type]
             webhook_url=config["webhook_url"],  # type: ignore[arg-type]
@@ -94,10 +100,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             debug=config["debug"],  # type: ignore[arg-type]
         )
     except KeyboardInterrupt:
-        print("[INFO] stopped by user")
+        logger.info("Stopped by user")
         return 130
     except (RuntimeError, OSError, ValueError) as error:
-        print(f"[ERROR] {error}")
+        logger.error("%s", error)
         return 1
 
     return 0
