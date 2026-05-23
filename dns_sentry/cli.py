@@ -10,6 +10,7 @@ from .config import (
     load_dns_interface,
     load_env_file,
 )
+from .demo import run_demo
 from .logging_config import setup_logging
 from .sniffer import start_dns_sniffer
 
@@ -44,6 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="enable debug output",
     )
     parser.add_argument("--webhook", help="Discord webhook URL")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="run simulated demo mode without network sniffing",
+    )
 
     return parser
 
@@ -66,6 +72,7 @@ def _resolve_cli_config(args: argparse.Namespace) -> dict[str, str | float | boo
         "threshold": threshold,
         "debug": debug,
         "webhook_url": webhook_url,
+        "demo": args.demo,
     }
 
 
@@ -76,13 +83,19 @@ def _log_startup(config: dict[str, str | float | bool | None]) -> None:
 
     logger.info("DNS-Sentry starting")
     logger.info(
-        "configuration interface=%s threshold=%s debug=%s discord_webhook_configured=%s",
+        "configuration interface=%s threshold=%s debug=%s demo=%s "
+        "discord_webhook_configured=%s",
         interface,
         config["threshold"],
         config["debug"],
+        config["demo"],
         webhook_enabled,
     )
-    logger.info("Starting DNS sniffer")
+
+    if config["demo"]:
+        logger.info("Starting demo mode")
+    else:
+        logger.info("Starting DNS sniffer")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -93,12 +106,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         config = _resolve_cli_config(args)
         _log_startup(config)
-        start_dns_sniffer(
-            interface=config["interface"],  # type: ignore[arg-type]
-            webhook_url=config["webhook_url"],  # type: ignore[arg-type]
-            threshold=config["threshold"],  # type: ignore[arg-type]
-            debug=config["debug"],  # type: ignore[arg-type]
-        )
+
+        if config["demo"]:
+            run_demo(
+                threshold=config["threshold"],  # type: ignore[arg-type]
+                webhook_url=config["webhook_url"],  # type: ignore[arg-type]
+            )
+        else:
+            start_dns_sniffer(
+                interface=config["interface"],  # type: ignore[arg-type]
+                webhook_url=config["webhook_url"],  # type: ignore[arg-type]
+                threshold=config["threshold"],  # type: ignore[arg-type]
+                debug=config["debug"],  # type: ignore[arg-type]
+            )
     except KeyboardInterrupt:
         logger.info("Stopped by user")
         return 130
