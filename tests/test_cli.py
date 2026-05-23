@@ -138,6 +138,24 @@ def test_main_runs_demo_without_starting_sniffer(monkeypatch, tmp_path) -> None:
     }
 
 
+def test_main_runs_gui_without_starting_sniffer(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    def fake_run_gui() -> None:
+        calls.append("gui")
+
+    def fake_start_dns_sniffer(**kwargs: object) -> None:
+        calls.append("sniffer")
+
+    monkeypatch.setattr(cli, "run_gui", fake_run_gui)
+    monkeypatch.setattr(cli, "start_dns_sniffer", fake_start_dns_sniffer)
+
+    assert cli.main(["--gui"]) == 0
+    assert calls == ["gui"]
+
+
 def test_parser_rejects_invalid_threshold() -> None:
     parser = cli.build_parser()
 

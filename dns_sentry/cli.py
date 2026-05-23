@@ -11,6 +11,7 @@ from .config import (
     load_env_file,
 )
 from .demo import run_demo
+from .gui import run_gui
 from .logging_config import setup_logging
 from .sniffer import start_dns_sniffer
 
@@ -49,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--demo",
         action="store_true",
         help="run simulated demo mode without network sniffing",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="run the minimal Tkinter desktop interface",
     )
 
     return parser
@@ -104,6 +110,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     logger = setup_logging()
 
     try:
+        if args.gui:
+            run_gui()
+            return 0
+
         config = _resolve_cli_config(args)
         _log_startup(config)
 
