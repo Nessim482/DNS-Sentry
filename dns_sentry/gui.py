@@ -15,10 +15,12 @@ from .config import (
     load_dns_debug,
     load_dns_entropy_threshold,
     load_dns_interface,
+    load_dns_risk_thresholds,
 )
 from .demo import run_demo
 from .logging_config import LOGGER_NAME, mask_sensitive_text, setup_logging
 from .quarantine import QuarantineState
+from .scoring import ThresholdConfig, validate_thresholds
 from .sniffer import start_dns_sniffer
 
 DEFAULT_GUI_THRESHOLD = 4.0
@@ -48,6 +50,28 @@ def _parse_threshold(value: str) -> float:
         raise ValueError("threshold must be non-negative")
 
     return threshold
+
+
+def _parse_risk_thresholds(
+    low_suspicious_threshold: str,
+    alert_threshold: str,
+    strong_alert_threshold: str,
+    quarantine_threshold: str,
+    containment_threshold: str,
+) -> ThresholdConfig:
+    try:
+        threshold_config = ThresholdConfig(
+            low_suspicious_threshold=int(low_suspicious_threshold.strip()),
+            alert_threshold=int(alert_threshold.strip()),
+            strong_alert_threshold=int(strong_alert_threshold.strip()),
+            quarantine_threshold=int(quarantine_threshold.strip()),
+            containment_threshold=int(containment_threshold.strip()),
+        )
+    except ValueError as error:
+        raise ValueError("risk thresholds must be integers") from error
+
+    validate_thresholds(threshold_config)
+    return threshold_config
 
 
 def _resolve_webhook(entry_value: str) -> str | None:
@@ -156,7 +180,7 @@ def _clear_quarantine_view(quarantine_state: QuarantineState, tree: object) -> N
         getattr(tree, "delete")(item_id)
 
 
-def run_gui() -> None:
+def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     """Run the DNS-Sentry Tkinter dashboard."""
     _configure_windows_taskbar_icon()
     root = tk.Tk()
@@ -172,8 +196,24 @@ def run_gui() -> None:
     worker: Thread | None = None
 
     interface_var = tk.StringVar(value=load_dns_interface() or "")
+    initial_threshold_config = threshold_config or load_dns_risk_thresholds()
     threshold_var = tk.StringVar(
         value=str(load_dns_entropy_threshold(default=DEFAULT_GUI_THRESHOLD))
+    )
+    low_suspicious_threshold_var = tk.StringVar(
+        value=str(initial_threshold_config.low_suspicious_threshold)
+    )
+    alert_threshold_var = tk.StringVar(
+        value=str(initial_threshold_config.alert_threshold)
+    )
+    strong_alert_threshold_var = tk.StringVar(
+        value=str(initial_threshold_config.strong_alert_threshold)
+    )
+    quarantine_threshold_var = tk.StringVar(
+        value=str(initial_threshold_config.quarantine_threshold)
+    )
+    containment_threshold_var = tk.StringVar(
+        value=str(initial_threshold_config.containment_threshold)
     )
     webhook_var = tk.StringVar(value="")
     debug_var = tk.BooleanVar(value=load_dns_debug())
@@ -212,8 +252,67 @@ def run_gui() -> None:
     threshold_entry = ttk.Entry(config_frame, textvariable=threshold_var, width=12)
     threshold_entry.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=4)
 
-    ttk.Checkbutton(config_frame, text="Debug logging", variable=debug_var).grid(
+    ttk.Label(config_frame, text="Low suspicious threshold").grid(
         row=3,
+        column=0,
+        sticky="w",
+    )
+    ttk.Entry(
+        config_frame,
+        textvariable=low_suspicious_threshold_var,
+        width=12,
+    ).grid(row=3, column=1, sticky="w", padx=(10, 0), pady=4)
+
+    ttk.Label(config_frame, text="Alert threshold").grid(row=4, column=0, sticky="w")
+    ttk.Entry(config_frame, textvariable=alert_threshold_var, width=12).grid(
+        row=4,
+        column=1,
+        sticky="w",
+        padx=(10, 0),
+        pady=4,
+    )
+
+    ttk.Label(config_frame, text="Strong alert threshold").grid(
+        row=5,
+        column=0,
+        sticky="w",
+    )
+    ttk.Entry(config_frame, textvariable=strong_alert_threshold_var, width=12).grid(
+        row=5,
+        column=1,
+        sticky="w",
+        padx=(10, 0),
+        pady=4,
+    )
+
+    ttk.Label(config_frame, text="Quarantine threshold").grid(
+        row=6,
+        column=0,
+        sticky="w",
+    )
+    ttk.Entry(config_frame, textvariable=quarantine_threshold_var, width=12).grid(
+        row=6,
+        column=1,
+        sticky="w",
+        padx=(10, 0),
+        pady=4,
+    )
+
+    ttk.Label(config_frame, text="Containment threshold").grid(
+        row=7,
+        column=0,
+        sticky="w",
+    )
+    ttk.Entry(config_frame, textvariable=containment_threshold_var, width=12).grid(
+        row=7,
+        column=1,
+        sticky="w",
+        padx=(10, 0),
+        pady=4,
+    )
+
+    ttk.Checkbutton(config_frame, text="Debug logging", variable=debug_var).grid(
+        row=8,
         column=1,
         sticky="w",
         padx=(10, 0),
@@ -321,6 +420,21 @@ def run_gui() -> None:
             logger.error("Invalid entropy threshold")
             return None
 
+    def current_threshold_config() -> ThresholdConfig | None:
+        logger = _configure_gui_logging(log_queue, debug_var.get())
+
+        try:
+            return _parse_risk_thresholds(
+                low_suspicious_threshold_var.get(),
+                alert_threshold_var.get(),
+                strong_alert_threshold_var.get(),
+                quarantine_threshold_var.get(),
+                containment_threshold_var.get(),
+            )
+        except ValueError as error:
+            logger.error("Invalid risk thresholds: %s", error)
+            return None
+
     def start_monitoring() -> None:
         nonlocal worker
         logger = _configure_gui_logging(log_queue, debug_var.get())
@@ -330,8 +444,9 @@ def run_gui() -> None:
             return
 
         threshold = current_threshold()
+        risk_thresholds = current_threshold_config()
 
-        if threshold is None:
+        if threshold is None or risk_thresholds is None:
             return
 
         interface = _clean_optional_text(interface_var.get())
@@ -340,11 +455,12 @@ def run_gui() -> None:
         update_status("Running")
         logger.info(
             "Starting GUI monitoring interface=%s threshold=%s debug=%s "
-            "discord_webhook_configured=%s",
+            "discord_webhook_configured=%s risk_thresholds=%s",
             interface or "auto",
             threshold,
             debug_var.get(),
             webhook_url is not None,
+            risk_thresholds,
         )
 
         def monitor() -> None:
@@ -353,6 +469,7 @@ def run_gui() -> None:
                     interface=interface,
                     webhook_url=webhook_url,
                     threshold=threshold,
+                    threshold_config=risk_thresholds,
                     debug=debug_var.get(),
                     stop_event=stop_event,
                     result_callback=enqueue_runtime_result,
@@ -373,17 +490,20 @@ def run_gui() -> None:
     def run_demo_from_gui() -> None:
         logger = _configure_gui_logging(log_queue, debug_var.get())
         threshold = current_threshold()
+        risk_thresholds = current_threshold_config()
 
-        if threshold is None:
+        if threshold is None or risk_thresholds is None:
             return
 
         webhook_url = _resolve_webhook(webhook_var.get())
         update_status("Running")
         logger.info(
-            "Starting GUI demo threshold=%s debug=%s discord_webhook_configured=%s",
+            "Starting GUI demo threshold=%s debug=%s "
+            "discord_webhook_configured=%s risk_thresholds=%s",
             threshold,
             debug_var.get(),
             webhook_url is not None,
+            risk_thresholds,
         )
 
         def demo_worker() -> None:
@@ -392,6 +512,7 @@ def run_gui() -> None:
                     threshold=threshold,
                     webhook_url=webhook_url,
                     result_callback=enqueue_runtime_result,
+                    threshold_config=risk_thresholds,
                 )
             except Exception as error:
                 logger.error("%s", error)

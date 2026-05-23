@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from .entropy import shannon_entropy
 
@@ -15,6 +16,77 @@ CONTEXT_MAX_SCORE = 10
 HEX_PATTERN = re.compile(r"^[a-f0-9]{16,}$")
 BASE32_PATTERN = re.compile(r"^[a-z2-7]{16,}$")
 BASE64URL_PATTERN = re.compile(r"^[a-z0-9_-]{20,}$")
+
+
+@dataclass(frozen=True)
+class ThresholdConfig:
+    low_suspicious_threshold: int = 25
+    alert_threshold: int = 45
+    strong_alert_threshold: int = 65
+    quarantine_threshold: int = 75
+    containment_threshold: int = 90
+
+
+_THRESHOLD_FIELDS = (
+    "low_suspicious_threshold",
+    "alert_threshold",
+    "strong_alert_threshold",
+    "quarantine_threshold",
+    "containment_threshold",
+)
+
+
+def validate_thresholds(config: ThresholdConfig) -> None:
+    """Validate risk decision thresholds before scoring uses them."""
+    for field_name in _THRESHOLD_FIELDS:
+        value = getattr(config, field_name)
+
+        if type(value) is not int:
+            raise ValueError(f"{field_name} must be an integer")
+
+        if value < 0 or value > 100:
+            raise ValueError(f"{field_name} must be between 0 and 100")
+
+    for lower_field, upper_field in zip(_THRESHOLD_FIELDS, _THRESHOLD_FIELDS[1:]):
+        lower_value = getattr(config, lower_field)
+        upper_value = getattr(config, upper_field)
+
+        if lower_value >= upper_value:
+            raise ValueError(
+                "invalid threshold order: "
+                f"{lower_field} must be less than {upper_field}"
+            )
+
+
+def decide_action(score: int, config: ThresholdConfig | None = None) -> dict:
+    """Map a risk score to severity and runtime action."""
+    threshold_config = config or ThresholdConfig()
+    validate_thresholds(threshold_config)
+
+    severity = "Safe"
+    action = "allow"
+
+    if score >= threshold_config.low_suspicious_threshold:
+        severity = "Low Suspicious"
+        action = "log"
+
+    if score >= threshold_config.alert_threshold:
+        severity = "Suspicious"
+        action = "alert"
+
+    if score >= threshold_config.strong_alert_threshold:
+        severity = "High Risk"
+        action = "strong_alert"
+
+    if score >= threshold_config.quarantine_threshold:
+        severity = "Dangerous"
+        action = "quarantine"
+
+    if score >= threshold_config.containment_threshold:
+        severity = "Critical"
+        action = "quarantine_and_containment"
+
+    return {"severity": severity, "action": action}
 
 
 def _normalize_domain(domain: str) -> str:
@@ -35,21 +107,6 @@ def _scored_labels(domain: str) -> list[str]:
         return labels
 
     return labels[:-1]
-
-
-def _severity_and_action(score: int) -> tuple[str, str]:
-    if score <= 24:
-        return "Safe", "allow"
-    if score <= 44:
-        return "Low Suspicious", "log"
-    if score <= 64:
-        return "Suspicious", "alert"
-    if score <= 74:
-        return "High Risk", "strong_alert"
-    if score <= 89:
-        return "Dangerous", "quarantine"
-
-    return "Critical", "quarantine_and_containment"
 
 
 def _has_high_digit_symbol_ratio(labels: Iterable[str]) -> bool:
@@ -274,6 +331,7 @@ def score_domain(
     telemetry_result: dict | None = None,
     reputation_result: dict | None = None,
     context: dict | None = None,
+    threshold_config: ThresholdConfig | None = None,
 ) -> dict:
     """Score one domain from local, already-collected DNS signals."""
     normalized_domain = _normalize_domain(domain)
@@ -301,12 +359,12 @@ def score_domain(
     if risk_score != raw_score:
         reasons.append(f"Final score clamped from {raw_score} to {risk_score}.")
 
-    severity, action = _severity_and_action(risk_score)
+    decision = decide_action(risk_score, threshold_config)
 
     return {
         "domain": normalized_domain,
         "risk_score": risk_score,
-        "severity": severity,
-        "action": action,
+        "severity": decision["severity"],
+        "action": decision["action"],
         "reasons": reasons,
     }

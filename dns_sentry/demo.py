@@ -9,7 +9,7 @@ from .analyzer import analyze_domain
 from .logging_config import LOGGER_NAME
 from .quarantine import apply_action
 from .reputation import check_reputation, load_domain_list
-from .scoring import score_domain
+from .scoring import ThresholdConfig, score_domain
 
 _LOGGER = logging.getLogger(LOGGER_NAME)
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
@@ -102,19 +102,26 @@ def _enrich_with_action_decision(result: dict) -> dict:
     return enriched_result
 
 
-def _enrich_demo_result(result: dict, threshold: float) -> dict:
+def _enrich_demo_result(
+    result: dict,
+    threshold: float,
+    threshold_config: ThresholdConfig | None = None,
+) -> dict:
     domain = str(result["domain"])
     telemetry_result = _DEMO_BEHAVIOR_OVERRIDES.get(domain, {})
     context = _DEMO_CONTEXT_OVERRIDES.get(domain, {})
 
     try:
-        scoring_result = score_domain(
-            domain,
-            threshold=threshold,
-            telemetry_result=telemetry_result,
-            reputation_result=_build_reputation_result(domain),
-            context=context,
-        )
+        scoring_kwargs = {
+            "threshold": threshold,
+            "telemetry_result": telemetry_result,
+            "reputation_result": _build_reputation_result(domain),
+            "context": context,
+        }
+        if threshold_config is not None:
+            scoring_kwargs["threshold_config"] = threshold_config
+
+        scoring_result = score_domain(domain, **scoring_kwargs)
     except Exception:
         _LOGGER.warning("DNS scoring failed for demo domain=%s", result["domain"])
         fallback_action = "alert" if result.get("suspicious") else "log"
@@ -160,13 +167,14 @@ def run_demo(
     threshold: float = 3.5,
     webhook_url: str | None = None,
     result_callback: Callable[[dict], None] | None = None,
+    threshold_config: ThresholdConfig | None = None,
 ) -> None:
     """Run DNS-Sentry against simulated DNS domains only."""
     _LOGGER.info("Starting DNS-Sentry demo mode")
 
     for domain in _DEMO_DOMAINS:
         result = analyze_domain(domain, threshold=threshold)
-        result = _enrich_demo_result(result, threshold)
+        result = _enrich_demo_result(result, threshold, threshold_config)
 
         if result["suspicious"] or should_send_discord_alert(result.get("action")):
             _LOGGER.warning(

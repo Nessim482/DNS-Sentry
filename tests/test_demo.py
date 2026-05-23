@@ -1,5 +1,6 @@
 from dns_sentry import demo
 from dns_sentry.logging_config import setup_logging
+from dns_sentry.scoring import ThresholdConfig
 
 TEST_WEBHOOK_URL = "https://example.test/webhook"
 
@@ -188,6 +189,45 @@ def test_run_demo_notifies_result_callback(monkeypatch) -> None:
     assert callback_results[0]["domain"] == "quarantine.example.com"
     assert callback_results[0]["quarantined"] is True
     assert callback_results[0]["containment_required"] is False
+
+
+def test_run_demo_passes_threshold_config_to_scoring(monkeypatch) -> None:
+    captured = {}
+    threshold_config = ThresholdConfig(quarantine_threshold=80)
+
+    def fake_analyze_domain(domain: str, threshold: float) -> dict[str, str | float | bool]:
+        return {
+            "domain": domain,
+            "subdomain": domain.split(".")[0],
+            "entropy": 1.0,
+            "threshold": threshold,
+            "suspicious": False,
+        }
+
+    def fake_score_domain(
+        domain: str,
+        threshold: float,
+        telemetry_result: dict,
+        reputation_result: dict,
+        context: dict,
+        threshold_config: ThresholdConfig,
+    ) -> dict:
+        captured["threshold_config"] = threshold_config
+        return {
+            "domain": domain,
+            "risk_score": 0,
+            "severity": "Safe",
+            "action": "allow",
+            "reasons": ["forced allow action for test"],
+        }
+
+    monkeypatch.setattr(demo, "_DEMO_DOMAINS", ("normal.example.com",))
+    monkeypatch.setattr(demo, "analyze_domain", fake_analyze_domain)
+    monkeypatch.setattr(demo, "score_domain", fake_score_domain)
+
+    demo.run_demo(threshold_config=threshold_config)
+
+    assert captured["threshold_config"] == threshold_config
 
 
 def test_demo_examples_include_logical_quarantine_actions() -> None:

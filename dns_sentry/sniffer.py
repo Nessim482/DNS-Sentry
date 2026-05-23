@@ -12,12 +12,13 @@ from .config import (
     load_dns_debug,
     load_dns_entropy_threshold,
     load_dns_interface,
+    load_dns_risk_thresholds,
 )
 from .logging_config import LOGGER_NAME, setup_logging
 from .parser import parse_dns_query
 from .quarantine import apply_action
 from .reputation import check_reputation, load_domain_list
-from .scoring import score_domain
+from .scoring import ThresholdConfig, score_domain
 from .telemetry import analyze_behavior, get_domain_stats, record_query
 
 _DNS_CAPTURE_FILTER = "udp and dst port 53"
@@ -143,14 +144,18 @@ def _enrich_with_scoring(
     telemetry_result: dict | None,
     reputation_result: dict | None,
     threshold: float,
+    threshold_config: ThresholdConfig | None = None,
 ) -> dict:
     try:
-        scoring_result = score_domain(
-            str(result["domain"]),
-            threshold=threshold,
-            telemetry_result=telemetry_result,
-            reputation_result=reputation_result,
-        )
+        scoring_kwargs = {
+            "threshold": threshold,
+            "telemetry_result": telemetry_result,
+            "reputation_result": reputation_result,
+        }
+        if threshold_config is not None:
+            scoring_kwargs["threshold_config"] = threshold_config
+
+        scoring_result = score_domain(str(result["domain"]), **scoring_kwargs)
     except Exception:
         _LOGGER.warning("DNS scoring failed for domain=%s", result["domain"])
         fallback_action = "alert" if result.get("suspicious") else "log"
@@ -273,6 +278,7 @@ def _handle_dns_packet(
     webhook_url: str | None = None,
     threshold: float = 3.5,
     result_callback: Callable[[dict], None] | None = None,
+    threshold_config: ThresholdConfig | None = None,
 ) -> dict | None:
     query_domain = _extract_query_domain(packet, dns_layer, dns_query_layer, udp_layer)
 
@@ -293,6 +299,7 @@ def _handle_dns_packet(
         telemetry_result=telemetry_result,
         reputation_result=reputation_result,
         threshold=threshold,
+        threshold_config=threshold_config,
     )
     result = _enrich_with_action_decision(result)
 
@@ -309,6 +316,7 @@ def start_dns_sniffer(
     interface: str | None = None,
     webhook_url: str | None = None,
     threshold: float | None = None,
+    threshold_config: ThresholdConfig | None = None,
     debug: bool | None = None,
     stop_event: object | None = None,
     result_callback: Callable[[dict], None] | None = None,
@@ -321,6 +329,9 @@ def start_dns_sniffer(
     )
     effective_threshold = (
         threshold if threshold is not None else load_dns_entropy_threshold()
+    )
+    effective_threshold_config = (
+        threshold_config if threshold_config is not None else load_dns_risk_thresholds()
     )
     effective_debug = debug if debug is not None else load_dns_debug()
     logger = logging.getLogger(LOGGER_NAME)
@@ -340,13 +351,14 @@ def start_dns_sniffer(
     sniff_kwargs: dict[str, Any] = {
         "filter": _DNS_CAPTURE_FILTER,
         "prn": lambda packet: _handle_dns_packet(
-            packet,
-            dns_layer,
-            dns_query_layer,
-            udp_layer,
-            effective_webhook_url,
-            effective_threshold,
-            result_callback,
+            packet=packet,
+            dns_layer=dns_layer,
+            dns_query_layer=dns_query_layer,
+            udp_layer=udp_layer,
+            webhook_url=effective_webhook_url,
+            threshold=effective_threshold,
+            result_callback=result_callback,
+            threshold_config=effective_threshold_config,
         ),
         "store": False,
     }

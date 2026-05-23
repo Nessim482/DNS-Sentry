@@ -2,7 +2,108 @@ import socket
 
 import pytest
 
-from dns_sentry.scoring import score_domain
+from dns_sentry.scoring import (
+    ThresholdConfig,
+    decide_action,
+    score_domain,
+    validate_thresholds,
+)
+
+
+def test_threshold_config_defaults() -> None:
+    config = ThresholdConfig()
+
+    assert config.low_suspicious_threshold == 25
+    assert config.alert_threshold == 45
+    assert config.strong_alert_threshold == 65
+    assert config.quarantine_threshold == 75
+    assert config.containment_threshold == 90
+
+
+@pytest.mark.parametrize(
+    ("score", "expected_severity", "expected_action"),
+    [
+        (24, "Safe", "allow"),
+        (25, "Low Suspicious", "log"),
+        (44, "Low Suspicious", "log"),
+        (45, "Suspicious", "alert"),
+        (64, "Suspicious", "alert"),
+        (65, "High Risk", "strong_alert"),
+        (74, "High Risk", "strong_alert"),
+        (75, "Dangerous", "quarantine"),
+        (89, "Dangerous", "quarantine"),
+        (90, "Critical", "quarantine_and_containment"),
+    ],
+)
+def test_decide_action_default_boundaries(
+    score,
+    expected_severity,
+    expected_action,
+) -> None:
+    decision = decide_action(score)
+
+    assert decision == {
+        "severity": expected_severity,
+        "action": expected_action,
+    }
+
+
+def test_validate_thresholds_rejects_non_integer() -> None:
+    config = ThresholdConfig(low_suspicious_threshold=25.5)
+
+    with pytest.raises(ValueError, match="low_suspicious_threshold must be an integer"):
+        validate_thresholds(config)
+
+
+def test_validate_thresholds_rejects_value_below_zero() -> None:
+    config = ThresholdConfig(low_suspicious_threshold=-1)
+
+    with pytest.raises(
+        ValueError,
+        match="low_suspicious_threshold must be between 0 and 100",
+    ):
+        validate_thresholds(config)
+
+
+def test_validate_thresholds_rejects_value_above_one_hundred() -> None:
+    config = ThresholdConfig(containment_threshold=101)
+
+    with pytest.raises(
+        ValueError,
+        match="containment_threshold must be between 0 and 100",
+    ):
+        validate_thresholds(config)
+
+
+def test_validate_thresholds_rejects_invalid_order() -> None:
+    config = ThresholdConfig(
+        low_suspicious_threshold=25,
+        alert_threshold=50,
+        strong_alert_threshold=60,
+        quarantine_threshold=40,
+        containment_threshold=90,
+    )
+
+    with pytest.raises(ValueError, match="invalid threshold order"):
+        validate_thresholds(config)
+
+
+def test_custom_quarantine_threshold_changes_action_boundary() -> None:
+    config = ThresholdConfig(quarantine_threshold=70)
+
+    assert decide_action(70, config) == {
+        "severity": "Dangerous",
+        "action": "quarantine",
+    }
+
+
+def test_custom_containment_threshold_changes_action_boundary() -> None:
+    config = ThresholdConfig(containment_threshold=85)
+
+    assert decide_action(85, config) == {
+        "severity": "Critical",
+        "action": "quarantine_and_containment",
+    }
 
 
 def test_normal_domain_gets_low_score() -> None:
@@ -63,6 +164,25 @@ def test_blacklist_adds_30_points() -> None:
 
     assert result["risk_score"] == 30
     assert "Blacklist match adds 30 reputation points." in result["reasons"]
+
+
+def test_score_domain_uses_custom_threshold_config() -> None:
+    result = score_domain(
+        "malicious-example.test",
+        telemetry_result={},
+        reputation_result={"blacklisted": True},
+        threshold_config=ThresholdConfig(
+            low_suspicious_threshold=10,
+            alert_threshold=30,
+            strong_alert_threshold=65,
+            quarantine_threshold=75,
+            containment_threshold=90,
+        ),
+    )
+
+    assert result["risk_score"] == 30
+    assert result["severity"] == "Suspicious"
+    assert result["action"] == "alert"
 
 
 def test_ioc_adds_25_points() -> None:
@@ -131,6 +251,13 @@ def test_whitelist_forces_score_zero() -> None:
             "suspicious_tld": True,
         },
         context={"previously_quarantined": True, "sensitive_host": True},
+        threshold_config=ThresholdConfig(
+            low_suspicious_threshold=1,
+            alert_threshold=2,
+            strong_alert_threshold=3,
+            quarantine_threshold=4,
+            containment_threshold=5,
+        ),
     )
 
     assert result == {

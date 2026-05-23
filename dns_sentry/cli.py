@@ -9,6 +9,7 @@ from .config import (
     load_dns_debug,
     load_dns_entropy_threshold,
     load_dns_interface,
+    load_dns_risk_thresholds,
     load_env_file,
 )
 from .demo import run_demo
@@ -35,6 +36,18 @@ def _non_negative_float(value: str) -> float:
     return threshold
 
 
+def _risk_threshold_int(value: str) -> int:
+    try:
+        threshold = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be an integer") from error
+
+    if threshold < 0 or threshold > 100:
+        raise argparse.ArgumentTypeError("must be between 0 and 100")
+
+    return threshold
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dns-sentry",
@@ -45,6 +58,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--threshold",
         type=_non_negative_float,
         help="entropy threshold for suspicious domains",
+    )
+    parser.add_argument(
+        "--low-suspicious-threshold",
+        type=_risk_threshold_int,
+        help="risk score threshold for Low Suspicious/log",
+    )
+    parser.add_argument(
+        "--alert-threshold",
+        type=_risk_threshold_int,
+        help="risk score threshold for Suspicious/alert",
+    )
+    parser.add_argument(
+        "--strong-alert-threshold",
+        type=_risk_threshold_int,
+        help="risk score threshold for High Risk/strong_alert",
+    )
+    parser.add_argument(
+        "--quarantine-threshold",
+        type=_risk_threshold_int,
+        help="risk score threshold for Dangerous/quarantine",
+    )
+    parser.add_argument(
+        "--containment-threshold",
+        type=_risk_threshold_int,
+        help="risk score threshold for Critical/quarantine_and_containment",
     )
     parser.add_argument(
         "--debug",
@@ -93,6 +131,7 @@ def check_environment() -> bool:
         load_discord_webhook_url()
         load_dns_entropy_threshold()
         load_dns_interface()
+        load_dns_risk_thresholds()
         load_dns_debug()
         build_parser()
     except (OSError, ValueError) as error:
@@ -105,12 +144,33 @@ def check_environment() -> bool:
     return ok
 
 
-def _resolve_cli_config(args: argparse.Namespace) -> dict[str, str | float | bool | None]:
+def _risk_threshold_overrides(args: argparse.Namespace) -> dict[str, int]:
+    overrides = {}
+
+    for field_name in (
+        "low_suspicious_threshold",
+        "alert_threshold",
+        "strong_alert_threshold",
+        "quarantine_threshold",
+        "containment_threshold",
+    ):
+        value = getattr(args, field_name)
+
+        if value is not None:
+            overrides[field_name] = value
+
+    return overrides
+
+
+def _resolve_cli_config(args: argparse.Namespace) -> dict[str, object]:
     load_env_file()
 
     interface = args.interface if args.interface is not None else load_dns_interface()
     threshold = (
         args.threshold if args.threshold is not None else load_dns_entropy_threshold()
+    )
+    threshold_config = load_dns_risk_thresholds(
+        overrides=_risk_threshold_overrides(args)
     )
     debug = args.debug if args.debug is not None else load_dns_debug()
     webhook_url = args.webhook if args.webhook is not None else load_discord_webhook_url()
@@ -121,13 +181,14 @@ def _resolve_cli_config(args: argparse.Namespace) -> dict[str, str | float | boo
     return {
         "interface": interface,
         "threshold": threshold,
+        "threshold_config": threshold_config,
         "debug": debug,
         "webhook_url": webhook_url,
         "demo": args.demo,
     }
 
 
-def _log_startup(config: dict[str, str | float | bool | None]) -> None:
+def _log_startup(config: dict[str, object]) -> None:
     logger = setup_logging(debug=bool(config["debug"]))
     interface = config["interface"] or "auto"
     webhook_enabled = config["webhook_url"] is not None
@@ -135,12 +196,13 @@ def _log_startup(config: dict[str, str | float | bool | None]) -> None:
     logger.info("DNS-Sentry starting")
     logger.info(
         "configuration interface=%s threshold=%s debug=%s demo=%s "
-        "discord_webhook_configured=%s",
+        "discord_webhook_configured=%s risk_thresholds=%s",
         interface,
         config["threshold"],
         config["debug"],
         config["demo"],
         webhook_enabled,
+        config["threshold_config"],
     )
 
     if config["demo"]:
@@ -158,23 +220,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.check_env:
             return 0 if check_environment() else 1
 
+        config = _resolve_cli_config(args)
+
         if args.gui:
-            run_gui()
+            run_gui(threshold_config=config["threshold_config"])  # type: ignore[arg-type]
             return 0
 
-        config = _resolve_cli_config(args)
         _log_startup(config)
 
         if config["demo"]:
             run_demo(
                 threshold=config["threshold"],  # type: ignore[arg-type]
                 webhook_url=config["webhook_url"],  # type: ignore[arg-type]
+                threshold_config=config["threshold_config"],  # type: ignore[arg-type]
             )
         else:
             start_dns_sniffer(
                 interface=config["interface"],  # type: ignore[arg-type]
                 webhook_url=config["webhook_url"],  # type: ignore[arg-type]
                 threshold=config["threshold"],  # type: ignore[arg-type]
+                threshold_config=config["threshold_config"],  # type: ignore[arg-type]
                 debug=config["debug"],  # type: ignore[arg-type]
             )
     except KeyboardInterrupt:
