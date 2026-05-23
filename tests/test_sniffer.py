@@ -1,4 +1,6 @@
-from dns_sentry import sniffer
+import pytest
+
+from dns_sentry import sniffer, telemetry
 from dns_sentry.logging_config import setup_logging
 
 TEST_WEBHOOK_URL = "https://example.test/webhook"
@@ -32,14 +34,23 @@ class FakePacket:
         return self.layers[layer]
 
 
-def make_dns_query_packet(domain: bytes | str) -> FakePacket:
+def make_dns_query_packet(domain: bytes | str, qtype: int | str | None = None) -> FakePacket:
+    query_values: dict[str, object] = {"qname": domain}
+    if qtype is not None:
+        query_values["qtype"] = qtype
+
     return FakePacket(
         {
             DNS: FakeLayer(qr=0),
-            DNSQR: FakeLayer(qname=domain),
+            DNSQR: FakeLayer(**query_values),
             UDP: FakeLayer(dport=53),
         }
     )
+
+
+@pytest.fixture(autouse=True)
+def reset_dns_telemetry() -> None:
+    telemetry.reset_telemetry()
 
 
 def test_extract_query_domain_from_dns_packet() -> None:
@@ -72,10 +83,14 @@ def test_handle_dns_packet_prints_info_for_normal_domain(capsys) -> None:
     assert result is not None
     assert result["domain"] == "google.com"
     assert result["suspicious"] is False
+    assert result["risk_score"] == 0
+    assert result["severity"] == "Safe"
+    assert result["action"] == "allow"
     assert (
         "[INFO] DNS query observed domain=google.com entropy=0.0 suspicious=False"
         in output
     )
+    assert "risk_score=0 severity=Safe action=allow" in output
 
 
 def test_handle_dns_packet_prints_alert_for_suspicious_domain(capsys) -> None:
@@ -92,20 +107,79 @@ def test_handle_dns_packet_prints_alert_for_suspicious_domain(capsys) -> None:
 
     assert result is not None
     assert result["suspicious"] is True
+    assert "risk_score" in result
+    assert "severity" in result
+    assert "action" in result
     assert output.startswith(
         "[WARNING] Suspicious DNS query detected "
         "domain=dghpcy1sb29rcy1sawtllwjhc2u2nc1kyxrh.attacker.com"
     )
+    assert "risk_score=" in output
 
 
-def test_handle_dns_packet_sends_alert_only_when_suspicious(monkeypatch) -> None:
+def test_handle_dns_packet_passes_telemetry_and_reputation_to_scoring(monkeypatch) -> None:
+    captured = {}
+
+    def fake_score_domain(
+        domain: str,
+        threshold: float,
+        telemetry_result: dict,
+        reputation_result: dict,
+    ) -> dict:
+        captured["domain"] = domain
+        captured["telemetry_result"] = telemetry_result
+        captured["reputation_result"] = reputation_result
+        return {
+            "domain": domain,
+            "risk_score": 45,
+            "severity": "Suspicious",
+            "action": "alert",
+            "reasons": ["forced alert action for test"],
+        }
+
+    monkeypatch.setattr(sniffer, "score_domain", fake_score_domain)
+
+    result = sniffer._handle_dns_packet(
+        make_dns_query_packet(b"malicious-example.test.", qtype=16),
+        DNS,
+        DNSQR,
+        UDP,
+    )
+
+    assert result is not None
+    assert captured["domain"] == "malicious-example.test"
+    assert captured["telemetry_result"]["record_types"] == {"TXT": 1}
+    assert captured["telemetry_result"]["unusual_record_type"] is True
+    assert captured["reputation_result"]["blacklisted"] is True
+    assert result["risk_score"] == 45
+    assert result["severity"] == "Suspicious"
+    assert result["action"] == "alert"
+
+
+def test_handle_dns_packet_does_not_send_discord_for_allow_or_log(monkeypatch) -> None:
     sent_alerts = []
 
     def fake_send_discord_alert(result: dict, webhook_url: str) -> bool:
         sent_alerts.append((result, webhook_url))
         return True
 
+    def fake_score_domain(
+        domain: str,
+        threshold: float,
+        telemetry_result: dict,
+        reputation_result: dict,
+    ) -> dict:
+        action = "allow" if domain == "google.com" else "log"
+        return {
+            "domain": domain,
+            "risk_score": 0 if action == "allow" else 25,
+            "severity": "Safe" if action == "allow" else "Low Suspicious",
+            "action": action,
+            "reasons": [f"forced {action} action for test"],
+        }
+
     monkeypatch.setattr(sniffer, "send_discord_alert", fake_send_discord_alert)
+    monkeypatch.setattr(sniffer, "score_domain", fake_score_domain)
 
     sniffer._handle_dns_packet(
         make_dns_query_packet(b"google.com."),
@@ -115,15 +189,56 @@ def test_handle_dns_packet_sends_alert_only_when_suspicious(monkeypatch) -> None
         webhook_url=TEST_WEBHOOK_URL,
     )
     sniffer._handle_dns_packet(
-        make_dns_query_packet("dGhpcy1sb29rcy1saWtlLWJhc2U2NC1kYXRh.attacker.com."),
+        make_dns_query_packet("log-only.example.com."),
         DNS,
         DNSQR,
         UDP,
         webhook_url=TEST_WEBHOOK_URL,
     )
 
+    assert sent_alerts == []
+
+
+@pytest.mark.parametrize(
+    "action",
+    ["alert", "strong_alert", "quarantine", "quarantine_and_containment"],
+)
+def test_handle_dns_packet_sends_discord_for_alert_actions(monkeypatch, action) -> None:
+    sent_alerts = []
+
+    def fake_send_discord_alert(result: dict, webhook_url: str) -> bool:
+        sent_alerts.append((result, webhook_url))
+        return True
+
+    def fake_score_domain(
+        domain: str,
+        threshold: float,
+        telemetry_result: dict,
+        reputation_result: dict,
+    ) -> dict:
+        return {
+            "domain": domain,
+            "risk_score": 45,
+            "severity": "Suspicious",
+            "action": action,
+            "reasons": [f"forced {action} action for test"],
+        }
+
+    monkeypatch.setattr(sniffer, "send_discord_alert", fake_send_discord_alert)
+    monkeypatch.setattr(sniffer, "score_domain", fake_score_domain)
+
+    result = sniffer._handle_dns_packet(
+        make_dns_query_packet(b"alert.example.com."),
+        DNS,
+        DNSQR,
+        UDP,
+        webhook_url=TEST_WEBHOOK_URL,
+    )
+
+    assert result is not None
+    assert result["action"] == action
     assert len(sent_alerts) == 1
-    assert sent_alerts[0][0]["suspicious"] is True
+    assert sent_alerts[0][0]["action"] == action
     assert sent_alerts[0][1] == TEST_WEBHOOK_URL
 
 
@@ -138,12 +253,27 @@ def test_start_dns_sniffer_uses_config_defaults(monkeypatch) -> None:
         sent_alerts.append((result, webhook_url))
         return True
 
+    def fake_score_domain(
+        domain: str,
+        threshold: float,
+        telemetry_result: dict,
+        reputation_result: dict,
+    ) -> dict:
+        return {
+            "domain": domain,
+            "risk_score": 45,
+            "severity": "Suspicious",
+            "action": "alert",
+            "reasons": ["forced alert action for test"],
+        }
+
     monkeypatch.setattr(sniffer, "_load_scapy", lambda: (DNS, DNSQR, UDP, fake_sniff))
     monkeypatch.setattr(sniffer, "load_dns_interface", lambda: "Ethernet")
     monkeypatch.setattr(sniffer, "load_discord_webhook_url", lambda: TEST_WEBHOOK_URL)
     monkeypatch.setattr(sniffer, "load_dns_entropy_threshold", lambda: 4.0)
     monkeypatch.setattr(sniffer, "load_dns_debug", lambda: False)
     monkeypatch.setattr(sniffer, "send_discord_alert", fake_send_discord_alert)
+    monkeypatch.setattr(sniffer, "score_domain", fake_score_domain)
 
     sniffer.start_dns_sniffer()
     calls["prn"](

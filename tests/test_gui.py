@@ -72,6 +72,30 @@ def test_gui_log_handler_masks_webhook_values() -> None:
     assert "webhook=[redacted]" in output
 
 
+def test_gui_log_handler_keeps_scoring_fields_and_masks_webhook() -> None:
+    log_queue: gui.Queue[str] = gui.Queue()
+    handler = gui._GuiLogHandler(log_queue)
+    record = logging.LogRecord(
+        name="dns_sentry",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=1,
+        msg=(
+            "risk_score=%s severity=%s action=%s webhook=%s"
+        ),
+        args=(55, "Suspicious", "alert", TEST_WEBHOOK_URL),
+        exc_info=None,
+    )
+
+    handler.emit(record)
+
+    output = log_queue.get_nowait()
+
+    assert "risk_score=55 severity=Suspicious action=alert" in output
+    assert TEST_WEBHOOK_URL not in output
+    assert "webhook=[redacted]" in output
+
+
 def test_parse_threshold_rejects_invalid_value() -> None:
     try:
         gui._parse_threshold("-1")
