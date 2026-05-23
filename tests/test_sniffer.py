@@ -2,6 +2,7 @@ import pytest
 
 from dns_sentry import sniffer, telemetry
 from dns_sentry.logging_config import setup_logging
+from dns_sentry.scoring import ThresholdConfig
 
 TEST_WEBHOOK_URL = "https://example.test/webhook"
 
@@ -307,6 +308,7 @@ def test_handle_dns_packet_sends_discord_for_alert_actions(monkeypatch, action) 
         threshold: float,
         telemetry_result: dict,
         reputation_result: dict,
+        threshold_config: ThresholdConfig | None = None,
     ) -> dict:
         return {
             "domain": domain,
@@ -362,7 +364,9 @@ def test_start_dns_sniffer_uses_config_defaults(monkeypatch) -> None:
         threshold: float,
         telemetry_result: dict,
         reputation_result: dict,
+        threshold_config: ThresholdConfig,
     ) -> dict:
+        calls["threshold_config"] = threshold_config
         return {
             "domain": domain,
             "risk_score": 45,
@@ -375,6 +379,11 @@ def test_start_dns_sniffer_uses_config_defaults(monkeypatch) -> None:
     monkeypatch.setattr(sniffer, "load_dns_interface", lambda: "Ethernet")
     monkeypatch.setattr(sniffer, "load_discord_webhook_url", lambda: TEST_WEBHOOK_URL)
     monkeypatch.setattr(sniffer, "load_dns_entropy_threshold", lambda: 4.0)
+    monkeypatch.setattr(
+        sniffer,
+        "load_dns_risk_thresholds",
+        lambda: ThresholdConfig(quarantine_threshold=80),
+    )
     monkeypatch.setattr(sniffer, "load_dns_debug", lambda: False)
     monkeypatch.setattr(sniffer, "send_discord_alert", fake_send_discord_alert)
     monkeypatch.setattr(sniffer, "score_domain", fake_score_domain)
@@ -385,6 +394,7 @@ def test_start_dns_sniffer_uses_config_defaults(monkeypatch) -> None:
     )
 
     assert calls["iface"] == "Ethernet"
+    assert calls["threshold_config"] == ThresholdConfig(quarantine_threshold=80)
     assert sent_alerts[0][0]["threshold"] == 4.0
     assert sent_alerts[0][1] == TEST_WEBHOOK_URL
 

@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 
 from dns_sentry import gui
+from dns_sentry.scoring import ThresholdConfig
 
 TEST_WEBHOOK_URL = "https://example.test/webhook"
 
@@ -198,4 +199,25 @@ def test_parse_threshold_rejects_invalid_value() -> None:
         pass
     else:
         raise AssertionError("negative threshold should fail")
+
+
+def test_parse_risk_thresholds_accepts_valid_values() -> None:
+    result = gui._parse_risk_thresholds("20", "40", "60", "80", "95")
+
+    assert result == ThresholdConfig(
+        low_suspicious_threshold=20,
+        alert_threshold=40,
+        strong_alert_threshold=60,
+        quarantine_threshold=80,
+        containment_threshold=95,
+    )
+
+
+def test_parse_risk_thresholds_rejects_incoherent_values() -> None:
+    try:
+        gui._parse_risk_thresholds("25", "45", "65", "40", "90")
+    except ValueError as error:
+        assert "invalid threshold order" in str(error)
+    else:
+        raise AssertionError("incoherent risk thresholds should fail")
 

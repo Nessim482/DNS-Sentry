@@ -1,4 +1,7 @@
+import pytest
+
 from dns_sentry import config
+from dns_sentry.scoring import ThresholdConfig
 
 
 def clear_config_env(monkeypatch) -> None:
@@ -7,6 +10,11 @@ def clear_config_env(monkeypatch) -> None:
         "DNS_ENTROPY_THRESHOLD",
         "DNS_INTERFACE",
         "DNS_DEBUG",
+        "DNS_LOW_SUSPICIOUS_THRESHOLD",
+        "DNS_ALERT_THRESHOLD",
+        "DNS_STRONG_ALERT_THRESHOLD",
+        "DNS_QUARANTINE_THRESHOLD",
+        "DNS_CONTAINMENT_THRESHOLD",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -18,6 +26,7 @@ def test_config_defaults_when_values_are_absent(monkeypatch, tmp_path) -> None:
     assert config.load_discord_webhook_url() is None
     assert config.load_dns_entropy_threshold() == 3.5
     assert config.load_dns_interface() is None
+    assert config.load_dns_risk_thresholds() == ThresholdConfig()
     assert config.load_dns_debug() is False
 
 
@@ -31,6 +40,11 @@ def test_config_loads_values_from_env_file(monkeypatch, tmp_path) -> None:
                 "DNS_ENTROPY_THRESHOLD=4.25",
                 "DNS_INTERFACE=Ethernet",
                 "DNS_DEBUG=true",
+                "DNS_LOW_SUSPICIOUS_THRESHOLD=20",
+                "DNS_ALERT_THRESHOLD=40",
+                "DNS_STRONG_ALERT_THRESHOLD=60",
+                "DNS_QUARANTINE_THRESHOLD=80",
+                "DNS_CONTAINMENT_THRESHOLD=95",
             ]
         ),
         encoding="utf-8",
@@ -39,6 +53,13 @@ def test_config_loads_values_from_env_file(monkeypatch, tmp_path) -> None:
     assert config.load_discord_webhook_url() == "https://example.test/webhook"
     assert config.load_dns_entropy_threshold() == 4.25
     assert config.load_dns_interface() == "Ethernet"
+    assert config.load_dns_risk_thresholds() == ThresholdConfig(
+        low_suspicious_threshold=20,
+        alert_threshold=40,
+        strong_alert_threshold=60,
+        quarantine_threshold=80,
+        containment_threshold=95,
+    )
     assert config.load_dns_debug() is True
 
 
@@ -52,6 +73,42 @@ def test_environment_variables_override_env_file(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("DNS_ENTROPY_THRESHOLD", "5.0")
 
     assert config.load_dns_entropy_threshold() == 5.0
+
+
+def test_environment_variables_override_risk_threshold_env_file(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    tmp_path.joinpath(".env").write_text(
+        "DNS_QUARANTINE_THRESHOLD=80",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DNS_QUARANTINE_THRESHOLD", "85")
+
+    assert config.load_dns_risk_thresholds().quarantine_threshold == 85
+
+
+def test_invalid_risk_threshold_env_raises_value_error(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DNS_ALERT_THRESHOLD", "not-an-int")
+
+    with pytest.raises(ValueError, match="DNS_ALERT_THRESHOLD must be an integer"):
+        config.load_dns_risk_thresholds()
+
+
+def test_invalid_risk_threshold_order_raises_value_error(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DNS_QUARANTINE_THRESHOLD", "40")
+
+    with pytest.raises(ValueError, match="invalid threshold order"):
+        config.load_dns_risk_thresholds()
 
 
 def test_invalid_threshold_falls_back_to_default(monkeypatch, tmp_path) -> None:
