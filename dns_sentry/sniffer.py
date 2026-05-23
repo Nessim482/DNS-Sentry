@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from typing import Any
 
+from .alerts import send_discord_alert
 from .analyzer import analyze_domain
 from .parser import parse_dns_query
 
@@ -65,6 +66,7 @@ def _handle_dns_packet(
     dns_layer: object,
     dns_query_layer: object,
     udp_layer: object,
+    webhook_url: str | None = None,
 ) -> dict[str, str | float | bool] | None:
     query_domain = _extract_query_domain(packet, dns_layer, dns_query_layer, udp_layer)
 
@@ -84,17 +86,23 @@ def _handle_dns_packet(
         f"entropy={result['entropy']:.1f} suspicious={result['suspicious']}"
     )
 
+    if result["suspicious"] and webhook_url is not None:
+        send_discord_alert(result, webhook_url)
+
     return result
 
 
-def start_dns_sniffer(interface: str | None = None) -> None:
+def start_dns_sniffer(
+    interface: str | None = None,
+    webhook_url: str | None = None,
+) -> None:
     """Start a minimal DNS-only sniffer for outgoing DNS queries."""
     dns_layer, dns_query_layer, udp_layer, sniff = _load_scapy()
 
     sniff_kwargs: dict[str, Any] = {
         "filter": _DNS_CAPTURE_FILTER,
         "prn": lambda packet: _handle_dns_packet(
-            packet, dns_layer, dns_query_layer, udp_layer
+            packet, dns_layer, dns_query_layer, udp_layer, webhook_url
         ),
         "store": False,
     }
@@ -103,4 +111,3 @@ def start_dns_sniffer(interface: str | None = None) -> None:
         sniff_kwargs["iface"] = interface
 
     sniff(**sniff_kwargs)
-
