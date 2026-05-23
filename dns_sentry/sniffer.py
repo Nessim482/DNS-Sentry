@@ -5,6 +5,12 @@ from typing import Any
 
 from .alerts import send_discord_alert
 from .analyzer import analyze_domain
+from .config import (
+    load_discord_webhook_url,
+    load_dns_debug,
+    load_dns_entropy_threshold,
+    load_dns_interface,
+)
 from .parser import parse_dns_query
 
 _DNS_CAPTURE_FILTER = "udp and dst port 53"
@@ -67,6 +73,7 @@ def _handle_dns_packet(
     dns_query_layer: object,
     udp_layer: object,
     webhook_url: str | None = None,
+    threshold: float = 3.5,
 ) -> dict[str, str | float | bool] | None:
     query_domain = _extract_query_domain(packet, dns_layer, dns_query_layer, udp_layer)
 
@@ -78,7 +85,7 @@ def _handle_dns_packet(
     if domain is None:
         return None
 
-    result = analyze_domain(domain)
+    result = analyze_domain(domain, threshold=threshold)
     level = "ALERT" if result["suspicious"] else "INFO"
 
     print(
@@ -95,19 +102,37 @@ def _handle_dns_packet(
 def start_dns_sniffer(
     interface: str | None = None,
     webhook_url: str | None = None,
+    threshold: float | None = None,
+    debug: bool | None = None,
 ) -> None:
     """Start a minimal DNS-only sniffer for outgoing DNS queries."""
     dns_layer, dns_query_layer, udp_layer, sniff = _load_scapy()
+    effective_interface = interface if interface is not None else load_dns_interface()
+    effective_webhook_url = (
+        webhook_url if webhook_url is not None else load_discord_webhook_url()
+    )
+    effective_threshold = (
+        threshold if threshold is not None else load_dns_entropy_threshold()
+    )
+    effective_debug = debug if debug is not None else load_dns_debug()
+
+    if effective_debug:
+        print(f"[DEBUG] DNS sniffer filter={_DNS_CAPTURE_FILTER}")
 
     sniff_kwargs: dict[str, Any] = {
         "filter": _DNS_CAPTURE_FILTER,
         "prn": lambda packet: _handle_dns_packet(
-            packet, dns_layer, dns_query_layer, udp_layer, webhook_url
+            packet,
+            dns_layer,
+            dns_query_layer,
+            udp_layer,
+            effective_webhook_url,
+            effective_threshold,
         ),
         "store": False,
     }
 
-    if interface is not None:
-        sniff_kwargs["iface"] = interface
+    if effective_interface is not None:
+        sniff_kwargs["iface"] = effective_interface
 
     sniff(**sniff_kwargs)
