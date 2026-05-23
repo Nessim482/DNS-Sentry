@@ -18,6 +18,8 @@ from .demo import run_demo
 from .logging_config import LOGGER_NAME, mask_sensitive_text, setup_logging
 from .sniffer import start_dns_sniffer
 
+DEFAULT_GUI_THRESHOLD = 4.0
+
 
 class _GuiLogHandler(logging.Handler):
     def __init__(self, log_queue: Queue[str]) -> None:
@@ -59,51 +61,87 @@ def run_gui() -> None:
     """Run the DNS-Sentry Tkinter dashboard."""
     root = tk.Tk()
     root.title("DNS-Sentry")
-    root.geometry("760x520")
+    root.geometry("820x560")
+    root.minsize(720, 500)
 
     log_queue: Queue[str] = Queue()
     stop_event = Event()
     worker: Thread | None = None
 
     interface_var = tk.StringVar(value=load_dns_interface() or "")
-    threshold_var = tk.StringVar(value=str(load_dns_entropy_threshold()))
+    threshold_var = tk.StringVar(
+        value=str(load_dns_entropy_threshold(default=DEFAULT_GUI_THRESHOLD))
+    )
     webhook_var = tk.StringVar(value="")
     debug_var = tk.BooleanVar(value=load_dns_debug())
     status_var = tk.StringVar(value="Stopped")
 
+    style = ttk.Style(root)
+    style.configure("Title.TLabel", font=("Segoe UI", 14, "bold"))
+    style.configure("Status.TLabel", font=("Segoe UI", 10, "bold"))
+
     main_frame = ttk.Frame(root, padding=12)
     main_frame.pack(fill=tk.BOTH, expand=True)
-    main_frame.columnconfigure(1, weight=1)
-    main_frame.rowconfigure(6, weight=1)
+    main_frame.columnconfigure(0, weight=1)
+    main_frame.rowconfigure(3, weight=1)
 
-    ttk.Label(main_frame, text="Discord webhook").grid(row=0, column=0, sticky="w")
-    webhook_entry = ttk.Entry(main_frame, textvariable=webhook_var, show="*")
-    webhook_entry.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=4)
+    ttk.Label(main_frame, text="DNS-Sentry", style="Title.TLabel").grid(
+        row=0,
+        column=0,
+        sticky="w",
+        pady=(0, 10),
+    )
 
-    ttk.Label(main_frame, text="Interface").grid(row=1, column=0, sticky="w")
-    interface_entry = ttk.Entry(main_frame, textvariable=interface_var)
-    interface_entry.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=4)
+    config_frame = ttk.LabelFrame(main_frame, text="Configuration", padding=10)
+    config_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+    config_frame.columnconfigure(1, weight=1)
 
-    ttk.Label(main_frame, text="Entropy threshold").grid(row=2, column=0, sticky="w")
-    threshold_entry = ttk.Entry(main_frame, textvariable=threshold_var)
-    threshold_entry.grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=4)
+    ttk.Label(config_frame, text="Discord webhook").grid(row=0, column=0, sticky="w")
+    webhook_entry = ttk.Entry(config_frame, textvariable=webhook_var, show="*")
+    webhook_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=4)
 
-    ttk.Checkbutton(main_frame, text="Debug", variable=debug_var).grid(
+    ttk.Label(config_frame, text="Network interface").grid(row=1, column=0, sticky="w")
+    interface_entry = ttk.Entry(config_frame, textvariable=interface_var)
+    interface_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=4)
+
+    ttk.Label(config_frame, text="Entropy threshold").grid(row=2, column=0, sticky="w")
+    threshold_entry = ttk.Entry(config_frame, textvariable=threshold_var, width=12)
+    threshold_entry.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=4)
+
+    ttk.Checkbutton(config_frame, text="Debug logging", variable=debug_var).grid(
         row=3,
         column=1,
         sticky="w",
-        padx=(8, 0),
+        padx=(10, 0),
         pady=4,
     )
 
-    controls = ttk.Frame(main_frame)
-    controls.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+    controls_frame = ttk.LabelFrame(main_frame, text="Controls", padding=10)
+    controls_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+    controls_frame.columnconfigure(3, weight=1)
 
-    status_label = ttk.Label(main_frame, textvariable=status_var)
-    status_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 8))
+    events_frame = ttk.LabelFrame(main_frame, text="Live Events", padding=10)
+    events_frame.grid(row=3, column=0, sticky="nsew")
+    events_frame.columnconfigure(0, weight=1)
+    events_frame.rowconfigure(1, weight=1)
 
-    log_text = scrolledtext.ScrolledText(main_frame, height=18, state=tk.DISABLED)
-    log_text.grid(row=6, column=0, columnspan=2, sticky="nsew")
+    status_label = ttk.Label(events_frame, style="Status.TLabel")
+    status_label.grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+    def update_status(value: str) -> None:
+        status_var.set(value)
+        status_label.configure(text=f"Status: {value}")
+
+    update_status("Stopped")
+
+    log_text = scrolledtext.ScrolledText(
+        events_frame,
+        height=16,
+        state=tk.DISABLED,
+        wrap=tk.WORD,
+        font=("Consolas", 10),
+    )
+    log_text.grid(row=1, column=0, sticky="nsew")
 
     def append_log(message: str) -> None:
         log_text.configure(state=tk.NORMAL)
@@ -121,7 +159,7 @@ def run_gui() -> None:
         root.after(100, drain_log_queue)
 
     def mark_stopped() -> None:
-        status_var.set("Stopped")
+        update_status("Stopped")
 
     def current_threshold() -> float | None:
         logger = _configure_gui_logging(log_queue, debug_var.get())
@@ -148,7 +186,7 @@ def run_gui() -> None:
         interface = _clean_optional_text(interface_var.get())
         webhook_url = _resolve_webhook(webhook_var.get())
         stop_event.clear()
-        status_var.set("Running")
+        update_status("Running")
         logger.info(
             "Starting GUI monitoring interface=%s threshold=%s debug=%s "
             "discord_webhook_configured=%s",
@@ -178,7 +216,7 @@ def run_gui() -> None:
     def stop_monitoring() -> None:
         _configure_gui_logging(log_queue, debug_var.get()).info("Stop requested")
         stop_event.set()
-        status_var.set("Stopped")
+        update_status("Stopped")
 
     def run_demo_from_gui() -> None:
         logger = _configure_gui_logging(log_queue, debug_var.get())
@@ -188,7 +226,7 @@ def run_gui() -> None:
             return
 
         webhook_url = _resolve_webhook(webhook_var.get())
-        status_var.set("Running")
+        update_status("Running")
         logger.info(
             "Starting GUI demo threshold=%s debug=%s discord_webhook_configured=%s",
             threshold,
@@ -206,15 +244,39 @@ def run_gui() -> None:
 
         Thread(target=demo_worker, daemon=True).start()
 
-    ttk.Button(controls, text="Start Monitoring", command=start_monitoring).pack(
-        side=tk.LEFT,
+    ttk.Button(
+        controls_frame,
+        text="Start Monitoring",
+        command=start_monitoring,
+    ).grid(
+        row=0,
+        column=0,
         padx=(0, 8),
+        sticky="w",
     )
-    ttk.Button(controls, text="Stop", command=stop_monitoring).pack(
-        side=tk.LEFT,
+    ttk.Button(controls_frame, text="Stop", command=stop_monitoring).grid(
+        row=0,
+        column=1,
         padx=(0, 8),
+        sticky="w",
     )
-    ttk.Button(controls, text="Run Demo", command=run_demo_from_gui).pack(side=tk.LEFT)
+    ttk.Button(controls_frame, text="Run Demo", command=run_demo_from_gui).grid(
+        row=0,
+        column=2,
+        padx=(0, 8),
+        sticky="w",
+    )
+    ttk.Label(controls_frame, text="Status:").grid(
+        row=0,
+        column=3,
+        sticky="e",
+    )
+    ttk.Label(controls_frame, textvariable=status_var, style="Status.TLabel").grid(
+        row=0,
+        column=4,
+        sticky="e",
+        padx=(6, 0),
+    )
 
     drain_log_queue()
     root.mainloop()
