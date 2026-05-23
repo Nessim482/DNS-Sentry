@@ -14,6 +14,11 @@ _HTTP_TIMEOUT_SECONDS = 3.0
 _ALERT_WINDOW_SECONDS = 60.0
 _RECENT_ALERTS: dict[tuple[str, str], float] = {}
 _LOGGER = logging.getLogger(LOGGER_NAME)
+_SEVERITY_COLORS = {
+    "Medium": 0xE67E22,
+    "High": 0xE74C3C,
+    "Critical": 0xC0392B,
+}
 
 
 def _is_valid_webhook_url(webhook_url: str) -> bool:
@@ -22,21 +27,42 @@ def _is_valid_webhook_url(webhook_url: str) -> bool:
     return parsed_url.scheme in {"http", "https"} and bool(parsed_url.netloc)
 
 
-def _build_discord_payload(result: dict, timestamp: str) -> dict[str, str]:
+def _severity_for_entropy(entropy: float, threshold: float) -> str:
+    if entropy >= threshold + 1.2:
+        return "Critical"
+
+    if entropy >= threshold + 0.7:
+        return "High"
+
+    return "Medium"
+
+
+def _build_discord_payload(result: dict, timestamp: str) -> dict[str, object]:
     domain = str(result["domain"])
+    subdomain = str(result.get("subdomain") or "N/A")
     entropy = float(result["entropy"])
     threshold = float(result["threshold"])
-    suspicious = bool(result["suspicious"])
+    severity = _severity_for_entropy(entropy, threshold)
 
     return {
-        "content": (
-            "DNS-Sentry alert\n"
-            f"domain: {domain}\n"
-            f"entropy: {entropy:.2f}\n"
-            f"threshold: {threshold:.2f}\n"
-            f"suspicious: {suspicious}\n"
-            f"timestamp: {timestamp}"
-        )
+        "embeds": [
+            {
+                "title": "DNS-Sentry Alert: Suspicious DNS Query",
+                "description": (
+                    "A DNS query with high-entropy characteristics was detected."
+                ),
+                "color": _SEVERITY_COLORS[severity],
+                "fields": [
+                    {"name": "Domain", "value": domain, "inline": False},
+                    {"name": "Subdomain", "value": subdomain, "inline": False},
+                    {"name": "Entropy", "value": f"{entropy:.2f}", "inline": True},
+                    {"name": "Threshold", "value": f"{threshold:.2f}", "inline": True},
+                    {"name": "Detection", "value": severity, "inline": True},
+                    {"name": "Timestamp UTC", "value": timestamp, "inline": False},
+                ],
+                "footer": {"text": "DNS-Sentry • Defensive DNS Monitoring"},
+            }
+        ]
     }
 
 
