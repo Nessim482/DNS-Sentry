@@ -156,6 +156,30 @@ def test_main_runs_gui_without_starting_sniffer(monkeypatch, tmp_path) -> None:
     assert calls == ["gui"]
 
 
+def test_main_check_env_does_not_start_sniffer(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    monkeypatch.setattr(cli, "check_environment", lambda: True)
+    monkeypatch.setattr(cli, "start_dns_sniffer", lambda **kwargs: calls.append(kwargs))
+
+    assert cli.main(["--check-env"]) == 0
+    assert calls == []
+
+
+def test_check_environment_reports_missing_dependency(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "_is_module_importable",
+        lambda module_name: module_name != "scapy",
+    )
+
+    assert cli.check_environment() is False
+
+
 def test_parser_rejects_invalid_threshold() -> None:
     parser = cli.build_parser()
 
