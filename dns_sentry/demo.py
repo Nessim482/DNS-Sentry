@@ -1,5 +1,6 @@
 """Demo mode for DNS-Sentry without real network capture."""
 
+from collections.abc import Callable
 import logging
 from pathlib import Path
 
@@ -142,7 +143,24 @@ def _enrich_demo_result(result: dict, threshold: float) -> dict:
     return _enrich_with_action_decision(enriched_result)
 
 
-def run_demo(threshold: float = 3.5, webhook_url: str | None = None) -> None:
+def _notify_result_callback(
+    result: dict,
+    result_callback: Callable[[dict], None] | None,
+) -> None:
+    if result_callback is None:
+        return
+
+    try:
+        result_callback(dict(result))
+    except Exception:
+        _LOGGER.warning("DNS demo result callback failed for domain=%s", result["domain"])
+
+
+def run_demo(
+    threshold: float = 3.5,
+    webhook_url: str | None = None,
+    result_callback: Callable[[dict], None] | None = None,
+) -> None:
     """Run DNS-Sentry against simulated DNS domains only."""
     _LOGGER.info("Starting DNS-Sentry demo mode")
 
@@ -166,6 +184,7 @@ def run_demo(threshold: float = 3.5, webhook_url: str | None = None) -> None:
                 result.get("containment_required", "N/A"),
                 result.get("quarantine_message", "N/A"),
             )
+            _notify_result_callback(result, result_callback)
 
             if webhook_url is not None and should_send_discord_alert(
                 result.get("action")
@@ -187,4 +206,5 @@ def run_demo(threshold: float = 3.5, webhook_url: str | None = None) -> None:
                 result.get("containment_required", "N/A"),
                 result.get("quarantine_message", "N/A"),
             )
+            _notify_result_callback(result, result_callback)
 

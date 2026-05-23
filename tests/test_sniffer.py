@@ -165,6 +165,42 @@ def test_handle_dns_packet_passes_telemetry_and_reputation_to_scoring(monkeypatc
     assert result["containment_required"] is False
 
 
+def test_handle_dns_packet_notifies_result_callback(monkeypatch) -> None:
+    results = []
+
+
+    def fake_score_domain(
+        domain: str,
+        threshold: float,
+        telemetry_result: dict,
+        reputation_result: dict,
+    ) -> dict:
+        return {
+            "domain": domain,
+            "risk_score": 75,
+            "severity": "Dangerous",
+            "action": "quarantine",
+            "reasons": ["forced quarantine action for test"],
+        }
+
+    monkeypatch.setattr(sniffer, "score_domain", fake_score_domain)
+
+    result = sniffer._handle_dns_packet(
+        make_dns_query_packet(b"quarantine.example.com."),
+        DNS,
+        DNSQR,
+        UDP,
+        result_callback=results.append,
+    )
+
+    assert result is not None
+    assert result["quarantined"] is True
+    assert result["containment_required"] is False
+    assert len(results) == 1
+    assert results[0]["domain"] == "quarantine.example.com"
+    assert results[0]["quarantined"] is True
+
+
 def test_handle_dns_packet_calls_apply_action(monkeypatch) -> None:
     captured = {}
 
@@ -312,6 +348,7 @@ def test_handle_dns_packet_sends_discord_for_alert_actions(monkeypatch, action) 
 def test_start_dns_sniffer_uses_config_defaults(monkeypatch) -> None:
     calls = {}
     sent_alerts = []
+    callback_results = []
 
     def fake_sniff(**kwargs: object) -> None:
         calls.update(kwargs)
@@ -350,6 +387,11 @@ def test_start_dns_sniffer_uses_config_defaults(monkeypatch) -> None:
     assert calls["iface"] == "Ethernet"
     assert sent_alerts[0][0]["threshold"] == 4.0
     assert sent_alerts[0][1] == TEST_WEBHOOK_URL
+
+    sniffer.start_dns_sniffer(result_callback=callback_results.append)
+    calls["prn"](make_dns_query_packet("callback.example.com."))
+
+    assert callback_results[0]["domain"] == "callback.example.com"
 
 
 def test_start_dns_sniffer_uses_dns_only_filter(monkeypatch) -> None:

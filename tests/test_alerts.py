@@ -63,6 +63,8 @@ def test_send_discord_alert_posts_payload(monkeypatch) -> None:
     assert fields["Risk Score"] == "N/A"
     assert fields["Severity"] == "High"
     assert fields["Action"] == "alert"
+    assert fields["Quarantine"] == "No"
+    assert fields["Containment Required"] == "No"
     assert fields["Top Reasons"] == "N/A"
     assert fields["Timestamp UTC"].endswith("Z")
     assert TEST_WEBHOOK_URL not in str(payload)

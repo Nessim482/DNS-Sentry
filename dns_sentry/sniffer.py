@@ -240,6 +240,19 @@ def _log_dns_result(result: dict) -> None:
     )
 
 
+def _notify_result_callback(
+    result: dict,
+    result_callback: Callable[[dict], None] | None,
+) -> None:
+    if result_callback is None:
+        return
+
+    try:
+        result_callback(dict(result))
+    except Exception:
+        _LOGGER.warning("DNS result callback failed for domain=%s", result["domain"])
+
+
 def _is_stop_requested(stop_event: object | None) -> bool:
     if stop_event is None:
         return False
@@ -259,6 +272,7 @@ def _handle_dns_packet(
     udp_layer: object,
     webhook_url: str | None = None,
     threshold: float = 3.5,
+    result_callback: Callable[[dict], None] | None = None,
 ) -> dict | None:
     query_domain = _extract_query_domain(packet, dns_layer, dns_query_layer, udp_layer)
 
@@ -283,6 +297,7 @@ def _handle_dns_packet(
     result = _enrich_with_action_decision(result)
 
     _log_dns_result(result)
+    _notify_result_callback(result, result_callback)
 
     if webhook_url is not None and should_send_discord_alert(result.get("action")):
         send_discord_alert(result, webhook_url)
@@ -296,6 +311,7 @@ def start_dns_sniffer(
     threshold: float | None = None,
     debug: bool | None = None,
     stop_event: object | None = None,
+    result_callback: Callable[[dict], None] | None = None,
 ) -> None:
     """Start a minimal DNS-only sniffer for outgoing DNS queries."""
     dns_layer, dns_query_layer, udp_layer, sniff = _load_scapy()
@@ -330,6 +346,7 @@ def start_dns_sniffer(
             udp_layer,
             effective_webhook_url,
             effective_threshold,
+            result_callback,
         ),
         "store": False,
     }
