@@ -90,7 +90,7 @@ def test_main_handles_keyboard_interrupt(monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.setattr(cli, "start_dns_sniffer", fake_start_dns_sniffer)
 
     assert cli.main([]) == 130
-    assert "[INFO] stopped by user" in capsys.readouterr().out
+    assert "[INFO] Stopped by user" in capsys.readouterr().out
 
 
 def test_main_handles_sniffer_error(monkeypatch, tmp_path, capsys) -> None:

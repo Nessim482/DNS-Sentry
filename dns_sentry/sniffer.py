@@ -1,6 +1,7 @@
 """Minimal real-time DNS sniffer for DNS-Sentry."""
 
 from collections.abc import Callable
+import logging
 from typing import Any
 
 from .alerts import send_discord_alert
@@ -11,9 +12,11 @@ from .config import (
     load_dns_entropy_threshold,
     load_dns_interface,
 )
+from .logging_config import LOGGER_NAME, setup_logging
 from .parser import parse_dns_query
 
 _DNS_CAPTURE_FILTER = "udp and dst port 53"
+_LOGGER = logging.getLogger(LOGGER_NAME)
 
 
 def _load_scapy() -> tuple[Any, Any, Any, Callable[..., Any]]:
@@ -86,12 +89,21 @@ def _handle_dns_packet(
         return None
 
     result = analyze_domain(domain, threshold=threshold)
-    level = "ALERT" if result["suspicious"] else "INFO"
 
-    print(
-        f"[{level}] {result['domain']} "
-        f"entropy={result['entropy']:.1f} suspicious={result['suspicious']}"
-    )
+    if result["suspicious"]:
+        _LOGGER.warning(
+            "Suspicious DNS query detected domain=%s entropy=%.1f suspicious=%s",
+            result["domain"],
+            result["entropy"],
+            result["suspicious"],
+        )
+    else:
+        _LOGGER.info(
+            "DNS query observed domain=%s entropy=%.1f suspicious=%s",
+            result["domain"],
+            result["entropy"],
+            result["suspicious"],
+        )
 
     if result["suspicious"] and webhook_url is not None:
         send_discord_alert(result, webhook_url)
@@ -115,9 +127,10 @@ def start_dns_sniffer(
         threshold if threshold is not None else load_dns_entropy_threshold()
     )
     effective_debug = debug if debug is not None else load_dns_debug()
+    setup_logging(debug=bool(effective_debug))
 
     if effective_debug:
-        print(f"[DEBUG] DNS sniffer filter={_DNS_CAPTURE_FILTER}")
+        _LOGGER.debug("DNS sniffer filter=%s", _DNS_CAPTURE_FILTER)
 
     sniff_kwargs: dict[str, Any] = {
         "filter": _DNS_CAPTURE_FILTER,

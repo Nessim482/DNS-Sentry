@@ -1,16 +1,19 @@
 """Minimal Discord alerting helpers for DNS-Sentry."""
 
 from datetime import datetime, timezone
+import logging
 from time import monotonic
 from urllib.parse import urlparse
 
 import requests
 
 from .config import load_discord_webhook_url
+from .logging_config import LOGGER_NAME
 
 _HTTP_TIMEOUT_SECONDS = 3.0
 _ALERT_WINDOW_SECONDS = 60.0
 _RECENT_ALERTS: dict[tuple[str, str], float] = {}
+_LOGGER = logging.getLogger(LOGGER_NAME)
 
 
 def _is_valid_webhook_url(webhook_url: str) -> bool:
@@ -42,9 +45,11 @@ def send_discord_alert(result: dict, webhook_url: str | None = None) -> bool:
     effective_webhook_url = webhook_url or load_discord_webhook_url()
 
     if effective_webhook_url is None:
+        _LOGGER.debug("Discord alert skipped: webhook not configured")
         return False
 
     if not _is_valid_webhook_url(effective_webhook_url):
+        _LOGGER.warning("Discord alert failed: invalid webhook URL")
         return False
 
     domain = str(result["domain"])
@@ -56,6 +61,7 @@ def send_discord_alert(result: dict, webhook_url: str | None = None) -> bool:
         previous_alert_time is not None
         and current_time - previous_alert_time < _ALERT_WINDOW_SECONDS
     ):
+        _LOGGER.debug("Discord alert skipped: duplicate alert suppressed")
         return False
 
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -68,12 +74,19 @@ def send_discord_alert(result: dict, webhook_url: str | None = None) -> bool:
             timeout=_HTTP_TIMEOUT_SECONDS,
         )
     except requests.Timeout:
+        _LOGGER.warning("Discord alert failed: request timed out")
         return False
     except requests.RequestException:
+        _LOGGER.warning("Discord alert failed: network error")
         return False
 
     if 200 <= response.status_code < 300:
         _RECENT_ALERTS[alert_key] = current_time
+        _LOGGER.info("Discord alert sent for domain=%s", domain)
         return True
 
+    _LOGGER.warning(
+        "Discord alert failed: webhook returned status=%s",
+        response.status_code,
+    )
     return False

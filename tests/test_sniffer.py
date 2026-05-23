@@ -1,4 +1,5 @@
 from dns_sentry import sniffer
+from dns_sentry.logging_config import setup_logging
 
 TEST_WEBHOOK_URL = "https://example.test/webhook"
 
@@ -60,6 +61,8 @@ def test_extract_query_domain_ignores_dns_response() -> None:
 
 
 def test_handle_dns_packet_prints_info_for_normal_domain(capsys) -> None:
+    setup_logging()
+
     result = sniffer._handle_dns_packet(
         make_dns_query_packet(b"google.com."), DNS, DNSQR, UDP
     )
@@ -69,10 +72,15 @@ def test_handle_dns_packet_prints_info_for_normal_domain(capsys) -> None:
     assert result is not None
     assert result["domain"] == "google.com"
     assert result["suspicious"] is False
-    assert "[INFO] google.com entropy=0.0 suspicious=False" in output
+    assert (
+        "[INFO] DNS query observed domain=google.com entropy=0.0 suspicious=False"
+        in output
+    )
 
 
 def test_handle_dns_packet_prints_alert_for_suspicious_domain(capsys) -> None:
+    setup_logging()
+
     result = sniffer._handle_dns_packet(
         make_dns_query_packet("dGhpcy1sb29rcy1saWtlLWJhc2U2NC1kYXRh.attacker.com."),
         DNS,
@@ -84,7 +92,10 @@ def test_handle_dns_packet_prints_alert_for_suspicious_domain(capsys) -> None:
 
     assert result is not None
     assert result["suspicious"] is True
-    assert output.startswith("[ALERT] dghpcy1sb29rcy1sawtllwjhc2u2nc1kyxrh.attacker.com")
+    assert output.startswith(
+        "[WARNING] Suspicious DNS query detected "
+        "domain=dghpcy1sb29rcy1sawtllwjhc2u2nc1kyxrh.attacker.com"
+    )
 
 
 def test_handle_dns_packet_sends_alert_only_when_suspicious(monkeypatch) -> None:
