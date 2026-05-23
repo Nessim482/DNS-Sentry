@@ -17,6 +17,7 @@ def test_high_entropy_domain_adds_10_points() -> None:
     result = score_domain("abcdefghijklmnopqrstuvwxyz.example.com", telemetry_result={})
 
     assert result["risk_score"] == 10
+    assert result["action"] == "allow"
     assert "High Shannon entropy adds 10 structure points." in result["reasons"]
 
 
@@ -76,26 +77,32 @@ def test_ioc_adds_25_points() -> None:
     assert "Imported IOC match adds 25 reputation points." in result["reasons"]
 
 
-def test_suspicious_tld_adds_5_points() -> None:
+def test_suspicious_tld_adds_weak_signal_only() -> None:
     result = score_domain(
         "download.example.zip",
         telemetry_result={},
         reputation_result={"suspicious_tld": True},
     )
 
-    assert result["risk_score"] == 5
-    assert "Suspicious TLD adds 5 reputation points." in result["reasons"]
+    assert result["risk_score"] == 3
+    assert result["action"] == "allow"
+    assert result["severity"] == "Safe"
+    assert "Suspicious TLD adds 3 weak reputation points." in result["reasons"]
+    assert "Weak reputation signal only; no alert escalation applied." in result["reasons"]
 
 
-def test_unknown_domain_adds_5_points() -> None:
+def test_unknown_domain_adds_weak_signal_only() -> None:
     result = score_domain(
         "unknown.example.test",
         telemetry_result={},
         reputation_result={"unknown_domain": True},
     )
 
-    assert result["risk_score"] == 5
-    assert "Unknown domain adds 5 reputation points." in result["reasons"]
+    assert result["risk_score"] == 3
+    assert result["action"] == "allow"
+    assert result["severity"] == "Safe"
+    assert "Unknown domain adds 3 weak reputation points." in result["reasons"]
+    assert "Weak reputation signal only; no alert escalation applied." in result["reasons"]
 
 
 def test_known_legitimate_reduces_20_points() -> None:
@@ -140,6 +147,62 @@ def test_whitelist_forces_score_zero() -> None:
         "action": "allow",
         "reasons": ["Whitelist match forces risk score to 0 and action allow."],
     }
+
+
+@pytest.mark.parametrize("domain", ["google.com", "microsoft.com", "openai.com"])
+def test_known_legitimate_examples_remain_safe_or_low(domain) -> None:
+    result = score_domain(
+        domain,
+        telemetry_result={},
+        reputation_result={"known_legitimate": True},
+    )
+
+    assert result["risk_score"] <= 24
+    assert result["action"] == "allow"
+    assert result["severity"] == "Safe"
+    assert "Known legitimate domain subtracts 20 reputation points." in result["reasons"]
+
+
+def test_known_legitimate_is_not_quarantined_from_structure_and_entropy() -> None:
+    result = score_domain(
+        "abcdefghijklmnopqrstuvwxyz1234.microsoft.com",
+        telemetry_result={
+            "repeated_queries": True,
+            "many_unique_subdomains": True,
+            "high_nxdomain_ratio": True,
+            "possible_beaconing": True,
+            "unusual_record_type": True,
+        },
+        reputation_result={"known_legitimate": True},
+        context={"sensitive_host": True, "unusual_activity_time": True},
+    )
+
+    assert result["action"] not in {"quarantine", "quarantine_and_containment"}
+    assert result["risk_score"] < 75
+    assert "Known legitimate domain subtracts 20 reputation points." in result["reasons"]
+
+
+def test_weak_reputation_plus_structure_and_behavior_is_capped_before_quarantine() -> None:
+    result = score_domain(
+        "bcdfghjklmnpqrstvwxyz-1234567890-9876543210.example.zip",
+        telemetry_result={
+            "repeated_queries": True,
+            "many_unique_subdomains": True,
+            "high_nxdomain_ratio": True,
+            "possible_beaconing": True,
+            "unusual_record_type": True,
+        },
+        reputation_result={"suspicious_tld": True, "unknown_domain": True},
+        context={"sensitive_host": True, "unusual_activity_time": True},
+    )
+
+    assert result["risk_score"] == 74
+    assert result["severity"] == "High Risk"
+    assert result["action"] == "strong_alert"
+    assert (
+        "Quarantine guardrail caps score at 74 without high-confidence reputation plus behavior."
+        in result["reasons"]
+    )
 
 
 def test_repeated_queries_adds_10_points() -> None:
@@ -376,4 +439,4 @@ def test_score_domain_does_not_use_network(monkeypatch) -> None:
         reputation_result={"unknown_domain": True},
     )
 
-    assert result["risk_score"] == 15
+    assert result["risk_score"] == 13
