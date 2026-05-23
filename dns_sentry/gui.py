@@ -18,6 +18,7 @@ from .config import (
 )
 from .demo import run_demo
 from .logging_config import LOGGER_NAME, mask_sensitive_text, setup_logging
+from .quarantine import QuarantineState
 from .sniffer import start_dns_sniffer
 
 DEFAULT_GUI_THRESHOLD = 4.0
@@ -102,6 +103,59 @@ def _configure_gui_logging(log_queue: Queue[str], debug: bool) -> logging.Logger
     return logger
 
 
+def _format_quarantine_value(value: object) -> str:
+    if value is None:
+        return "N/A"
+
+    return str(value)
+
+
+def _quarantine_entry_from_result(
+    quarantine_state: QuarantineState,
+    result: dict,
+) -> dict | None:
+    if not result.get("quarantined"):
+        return None
+
+    quarantine_state.add(result)
+    domain = str(result["domain"]).strip().rstrip(".").lower()
+
+    for entry in quarantine_state.list_quarantined():
+        if entry["domain"] == domain:
+            return entry
+
+    return None
+
+
+def _quarantine_tree_values(entry: dict) -> tuple[str, str, str, str, str]:
+    return (
+        _format_quarantine_value(entry.get("domain")),
+        _format_quarantine_value(entry.get("risk_score")),
+        _format_quarantine_value(entry.get("severity")),
+        _format_quarantine_value(entry.get("action")),
+        _format_quarantine_value(entry.get("timestamp")),
+    )
+
+
+def _upsert_quarantine_tree_item(tree: object, entry: dict) -> None:
+    item_id = str(entry["domain"])
+    values = _quarantine_tree_values(entry)
+    exists = getattr(tree, "exists")(item_id)
+
+    if exists:
+        getattr(tree, "item")(item_id, values=values)
+        return
+
+    getattr(tree, "insert")("", "end", iid=item_id, values=values)
+
+
+def _clear_quarantine_view(quarantine_state: QuarantineState, tree: object) -> None:
+    quarantine_state.clear()
+
+    for item_id in list(getattr(tree, "get_children")()):
+        getattr(tree, "delete")(item_id)
+
+
 def run_gui() -> None:
     """Run the DNS-Sentry Tkinter dashboard."""
     _configure_windows_taskbar_icon()
@@ -112,6 +166,8 @@ def run_gui() -> None:
     root.minsize(720, 500)
 
     log_queue: Queue[str] = Queue()
+    quarantine_queue: Queue[dict] = Queue()
+    quarantine_state = QuarantineState()
     stop_event = Event()
     worker: Thread | None = None
 
@@ -130,7 +186,8 @@ def run_gui() -> None:
     main_frame = ttk.Frame(root, padding=12)
     main_frame.pack(fill=tk.BOTH, expand=True)
     main_frame.columnconfigure(0, weight=1)
-    main_frame.rowconfigure(3, weight=1)
+    main_frame.rowconfigure(3, weight=3)
+    main_frame.rowconfigure(4, weight=1)
 
     ttk.Label(main_frame, text="DNS-Sentry", style="Title.TLabel").grid(
         row=0,
@@ -190,11 +247,43 @@ def run_gui() -> None:
     )
     log_text.grid(row=1, column=0, sticky="nsew")
 
+    quarantine_frame = ttk.LabelFrame(main_frame, text="Quarantine", padding=10)
+    quarantine_frame.grid(row=4, column=0, sticky="nsew")
+    quarantine_frame.columnconfigure(0, weight=1)
+    quarantine_frame.rowconfigure(1, weight=1)
+
+    quarantine_tree = ttk.Treeview(
+        quarantine_frame,
+        columns=("domain", "risk_score", "severity", "action", "timestamp"),
+        show="headings",
+        height=5,
+    )
+    quarantine_tree.heading("domain", text="Domain")
+    quarantine_tree.heading("risk_score", text="Risk Score")
+    quarantine_tree.heading("severity", text="Severity")
+    quarantine_tree.heading("action", text="Action")
+    quarantine_tree.heading("timestamp", text="Timestamp")
+    quarantine_tree.column("domain", width=260, anchor="w")
+    quarantine_tree.column("risk_score", width=80, anchor="center")
+    quarantine_tree.column("severity", width=120, anchor="center")
+    quarantine_tree.column("action", width=170, anchor="center")
+    quarantine_tree.column("timestamp", width=140, anchor="center")
+    quarantine_tree.grid(row=1, column=0, sticky="nsew")
+
     def append_log(message: str) -> None:
         log_text.configure(state=tk.NORMAL)
         log_text.insert(tk.END, f"{message}\n")
         log_text.see(tk.END)
         log_text.configure(state=tk.DISABLED)
+
+    def enqueue_runtime_result(result: dict) -> None:
+        if result.get("quarantined"):
+            quarantine_queue.put(dict(result))
+
+    def append_quarantine_result(result: dict) -> None:
+        entry = _quarantine_entry_from_result(quarantine_state, result)
+        if entry is not None:
+            _upsert_quarantine_tree_item(quarantine_tree, entry)
 
     def drain_log_queue() -> None:
         while True:
@@ -204,6 +293,21 @@ def run_gui() -> None:
                 break
 
         root.after(100, drain_log_queue)
+
+    def drain_quarantine_queue() -> None:
+        while True:
+            try:
+                append_quarantine_result(quarantine_queue.get_nowait())
+            except Empty:
+                break
+
+        root.after(100, drain_quarantine_queue)
+
+    def clear_quarantine() -> None:
+        _clear_quarantine_view(quarantine_state, quarantine_tree)
+        _configure_gui_logging(log_queue, debug_var.get()).info(
+            "Logical quarantine view cleared"
+        )
 
     def mark_stopped() -> None:
         update_status("Stopped")
@@ -251,6 +355,7 @@ def run_gui() -> None:
                     threshold=threshold,
                     debug=debug_var.get(),
                     stop_event=stop_event,
+                    result_callback=enqueue_runtime_result,
                 )
             except Exception as error:
                 logger.error("%s", error)
@@ -283,7 +388,11 @@ def run_gui() -> None:
 
         def demo_worker() -> None:
             try:
-                run_demo(threshold=threshold, webhook_url=webhook_url)
+                run_demo(
+                    threshold=threshold,
+                    webhook_url=webhook_url,
+                    result_callback=enqueue_runtime_result,
+                )
             except Exception as error:
                 logger.error("%s", error)
             finally:
@@ -324,7 +433,18 @@ def run_gui() -> None:
         sticky="e",
         padx=(6, 0),
     )
+    ttk.Button(
+        quarantine_frame,
+        text="Clear Quarantine",
+        command=clear_quarantine,
+    ).grid(
+        row=0,
+        column=0,
+        sticky="e",
+        pady=(0, 8),
+    )
 
     drain_log_queue()
+    drain_quarantine_queue()
     root.mainloop()
 

@@ -23,6 +23,7 @@ def test_run_demo_analyzes_simulated_domains(monkeypatch) -> None:
         threshold: float,
         telemetry_result: dict,
         reputation_result: dict,
+        context: dict,
     ) -> dict:
         scored_domains.append((domain, threshold, telemetry_result, reputation_result))
         return {
@@ -61,6 +62,7 @@ def test_run_demo_sends_alerts_only_for_alert_actions(monkeypatch) -> None:
         threshold: float,
         telemetry_result: dict,
         reputation_result: dict,
+        context: dict,
     ) -> dict:
         action = "alert" if domain.startswith("alert") else "log"
         return {
@@ -110,6 +112,7 @@ def test_run_demo_logs_info_and_alert_without_webhook(monkeypatch, capsys) -> No
         threshold: float,
         telemetry_result: dict,
         reputation_result: dict,
+        context: dict,
     ) -> dict:
         return {
             "domain": domain,
@@ -129,4 +132,62 @@ def test_run_demo_logs_info_and_alert_without_webhook(monkeypatch, capsys) -> No
     assert "INFO demo DNS query domain=normal.example.com" in output
     assert "ALERT demo DNS query domain=suspicious.example.com" in output
     assert "risk_score=45 severity=Suspicious action=alert" in output
+    assert "quarantined=False containment_required=False" in output
     assert TEST_WEBHOOK_URL not in output
+
+
+def test_run_demo_notifies_result_callback(monkeypatch) -> None:
+    callback_results = []
+
+    def fake_analyze_domain(domain: str, threshold: float) -> dict[str, str | float | bool]:
+        return {
+            "domain": domain,
+            "subdomain": domain.split(".")[0],
+            "entropy": 4.5,
+            "threshold": threshold,
+            "suspicious": True,
+        }
+
+    def fake_score_domain(
+        domain: str,
+        threshold: float,
+        telemetry_result: dict,
+        reputation_result: dict,
+        context: dict,
+    ) -> dict:
+        return {
+            "domain": domain,
+            "risk_score": 75,
+            "severity": "Dangerous",
+            "action": "quarantine",
+            "reasons": ["forced quarantine action for test"],
+        }
+
+    monkeypatch.setattr(demo, "_DEMO_DOMAINS", ("quarantine.example.com",))
+    monkeypatch.setattr(demo, "analyze_domain", fake_analyze_domain)
+    monkeypatch.setattr(demo, "score_domain", fake_score_domain)
+
+    demo.run_demo(result_callback=callback_results.append)
+
+    assert len(callback_results) == 1
+    assert callback_results[0]["domain"] == "quarantine.example.com"
+    assert callback_results[0]["quarantined"] is True
+    assert callback_results[0]["containment_required"] is False
+
+
+def test_demo_examples_include_logical_quarantine_actions() -> None:
+    quarantine_result = demo._enrich_demo_result(
+        demo.analyze_domain("simulated-quarantine.malicious-example.test"),
+        threshold=3.5,
+    )
+    containment_result = demo._enrich_demo_result(
+        demo.analyze_domain("abcdefghijklmnopqrstuvwxyz1234.malicious-example.test"),
+        threshold=3.5,
+    )
+
+    assert quarantine_result["action"] == "quarantine"
+    assert quarantine_result["quarantined"] is True
+    assert quarantine_result["containment_required"] is False
+    assert containment_result["action"] == "quarantine_and_containment"
+    assert containment_result["quarantined"] is True
+    assert containment_result["containment_required"] is True

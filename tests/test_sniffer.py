@@ -86,11 +86,14 @@ def test_handle_dns_packet_prints_info_for_normal_domain(capsys) -> None:
     assert result["risk_score"] == 0
     assert result["severity"] == "Safe"
     assert result["action"] == "allow"
+    assert result["quarantined"] is False
+    assert result["containment_required"] is False
     assert (
         "[INFO] DNS query observed domain=google.com entropy=0.0 suspicious=False"
         in output
     )
     assert "risk_score=0 severity=Safe action=allow" in output
+    assert "quarantined=False containment_required=False" in output
 
 
 def test_handle_dns_packet_prints_alert_for_suspicious_domain(capsys) -> None:
@@ -110,6 +113,8 @@ def test_handle_dns_packet_prints_alert_for_suspicious_domain(capsys) -> None:
     assert "risk_score" in result
     assert "severity" in result
     assert "action" in result
+    assert "quarantined" in result
+    assert "containment_required" in result
     assert output.startswith(
         "[WARNING] Suspicious DNS query detected "
         "domain=dghpcy1sb29rcy1sawtllwjhc2u2nc1kyxrh.attacker.com"
@@ -154,6 +159,43 @@ def test_handle_dns_packet_passes_telemetry_and_reputation_to_scoring(monkeypatc
     assert result["risk_score"] == 45
     assert result["severity"] == "Suspicious"
     assert result["action"] == "alert"
+    assert result["quarantined"] is False
+    assert result["containment_required"] is False
+
+
+def test_handle_dns_packet_notifies_result_callback(monkeypatch) -> None:
+    results = []
+
+    def fake_score_domain(
+        domain: str,
+        threshold: float,
+        telemetry_result: dict,
+        reputation_result: dict,
+    ) -> dict:
+        return {
+            "domain": domain,
+            "risk_score": 75,
+            "severity": "Dangerous",
+            "action": "quarantine",
+            "reasons": ["forced quarantine action for test"],
+        }
+
+    monkeypatch.setattr(sniffer, "score_domain", fake_score_domain)
+
+    result = sniffer._handle_dns_packet(
+        make_dns_query_packet(b"quarantine.example.com."),
+        DNS,
+        DNSQR,
+        UDP,
+        result_callback=results.append,
+    )
+
+    assert result is not None
+    assert result["quarantined"] is True
+    assert result["containment_required"] is False
+    assert len(results) == 1
+    assert results[0]["domain"] == "quarantine.example.com"
+    assert results[0]["quarantined"] is True
 
 
 def test_handle_dns_packet_does_not_send_discord_for_allow_or_log(monkeypatch) -> None:
@@ -241,10 +283,21 @@ def test_handle_dns_packet_sends_discord_for_alert_actions(monkeypatch, action) 
     assert sent_alerts[0][0]["action"] == action
     assert sent_alerts[0][1] == TEST_WEBHOOK_URL
 
+    if action == "quarantine":
+        assert result["quarantined"] is True
+        assert result["containment_required"] is False
+    elif action == "quarantine_and_containment":
+        assert result["quarantined"] is True
+        assert result["containment_required"] is True
+    else:
+        assert result["quarantined"] is False
+        assert result["containment_required"] is False
+
 
 def test_start_dns_sniffer_uses_config_defaults(monkeypatch) -> None:
     calls = {}
     sent_alerts = []
+    callback_results = []
 
     def fake_sniff(**kwargs: object) -> None:
         calls.update(kwargs)
@@ -283,6 +336,11 @@ def test_start_dns_sniffer_uses_config_defaults(monkeypatch) -> None:
     assert calls["iface"] == "Ethernet"
     assert sent_alerts[0][0]["threshold"] == 4.0
     assert sent_alerts[0][1] == TEST_WEBHOOK_URL
+
+    sniffer.start_dns_sniffer(result_callback=callback_results.append)
+    calls["prn"](make_dns_query_packet("callback.example.com."))
+
+    assert callback_results[0]["domain"] == "callback.example.com"
 
 
 def test_start_dns_sniffer_uses_dns_only_filter(monkeypatch) -> None:

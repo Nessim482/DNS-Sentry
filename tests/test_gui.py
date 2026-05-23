@@ -81,9 +81,10 @@ def test_gui_log_handler_keeps_scoring_fields_and_masks_webhook() -> None:
         pathname=__file__,
         lineno=1,
         msg=(
-            "risk_score=%s severity=%s action=%s webhook=%s"
+            "risk_score=%s severity=%s action=%s quarantined=%s "
+            "containment_required=%s webhook=%s"
         ),
-        args=(55, "Suspicious", "alert", TEST_WEBHOOK_URL),
+        args=(55, "Suspicious", "alert", True, False, TEST_WEBHOOK_URL),
         exc_info=None,
     )
 
@@ -92,8 +93,102 @@ def test_gui_log_handler_keeps_scoring_fields_and_masks_webhook() -> None:
     output = log_queue.get_nowait()
 
     assert "risk_score=55 severity=Suspicious action=alert" in output
+    assert "quarantined=True containment_required=False" in output
     assert TEST_WEBHOOK_URL not in output
     assert "webhook=[redacted]" in output
+
+
+class FakeTree:
+    def __init__(self) -> None:
+        self.items: dict[str, tuple[str, str, str, str, str]] = {}
+
+    def exists(self, item_id: str) -> bool:
+        return item_id in self.items
+
+    def insert(
+        self,
+        parent: str,
+        index: str,
+        iid: str,
+        values: tuple[str, str, str, str, str],
+    ) -> None:
+        self.items[iid] = values
+
+    def item(self, item_id: str, values: tuple[str, str, str, str, str]) -> None:
+        self.items[item_id] = values
+
+    def get_children(self) -> tuple[str, ...]:
+        return tuple(self.items)
+
+    def delete(self, item_id: str) -> None:
+        del self.items[item_id]
+
+
+def test_quarantine_entry_from_result_ignores_non_quarantined_result() -> None:
+    state = gui.QuarantineState()
+
+    entry = gui._quarantine_entry_from_result(
+        state,
+        {
+            "domain": "safe.example.com",
+            "risk_score": 0,
+            "severity": "Safe",
+            "action": "allow",
+            "quarantined": False,
+            "reasons": [],
+        },
+    )
+
+    assert entry is None
+    assert state.list_quarantined() == []
+
+
+def test_quarantine_entry_can_be_added_to_view() -> None:
+    state = gui.QuarantineState()
+    tree = FakeTree()
+    result = {
+        "domain": "Danger.Example.TEST.",
+        "risk_score": 80,
+        "severity": "Dangerous",
+        "action": "quarantine",
+        "quarantined": True,
+        "reasons": ["Logical quarantine test"],
+    }
+
+    entry = gui._quarantine_entry_from_result(state, result)
+    assert entry is not None
+    gui._upsert_quarantine_tree_item(tree, entry)
+
+    assert state.is_quarantined("danger.example.test") is True
+    assert "danger.example.test" in tree.items
+    assert tree.items["danger.example.test"][:4] == (
+        "danger.example.test",
+        "80",
+        "Dangerous",
+        "quarantine",
+    )
+    assert TEST_WEBHOOK_URL not in str(tree.items)
+
+
+def test_clear_quarantine_view_empties_state_and_tree() -> None:
+    state = gui.QuarantineState()
+    tree = FakeTree()
+    result = {
+        "domain": "danger.example.test",
+        "risk_score": 80,
+        "severity": "Dangerous",
+        "action": "quarantine",
+        "quarantined": True,
+        "reasons": ["Logical quarantine test"],
+    }
+    entry = gui._quarantine_entry_from_result(state, result)
+    assert entry is not None
+    gui._upsert_quarantine_tree_item(tree, entry)
+
+    gui._clear_quarantine_view(state, tree)
+
+    assert state.list_quarantined() == []
+    assert tree.items == {}
 
 
 def test_parse_threshold_rejects_invalid_value() -> None:

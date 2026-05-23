@@ -15,6 +15,7 @@ from .config import (
 )
 from .logging_config import LOGGER_NAME, setup_logging
 from .parser import parse_dns_query
+from .quarantine import apply_action
 from .reputation import check_reputation, load_domain_list
 from .scoring import score_domain
 from .telemetry import analyze_behavior, get_domain_stats, record_query
@@ -178,6 +179,36 @@ def _enrich_with_scoring(
     return enriched_result
 
 
+def _enrich_with_action_decision(result: dict) -> dict:
+    try:
+        action_result = apply_action(result)
+    except Exception:
+        _LOGGER.warning("DNS action decision failed for domain=%s", result["domain"])
+        enriched_result = dict(result)
+        enriched_result.update(
+            {
+                "applied": False,
+                "quarantined": False,
+                "containment_required": False,
+                "quarantine_message": "Logical quarantine decision unavailable.",
+            }
+        )
+        return enriched_result
+
+    enriched_result = dict(result)
+    enriched_result.update(
+        {
+            "domain": action_result["domain"],
+            "action": action_result["action"],
+            "applied": action_result["applied"],
+            "quarantined": action_result["quarantined"],
+            "containment_required": action_result["containment_required"],
+            "quarantine_message": action_result["message"],
+        }
+    )
+    return enriched_result
+
+
 def _log_dns_result(result: dict) -> None:
     log_values = (
         result["domain"],
@@ -186,21 +217,38 @@ def _log_dns_result(result: dict) -> None:
         result.get("risk_score", "N/A"),
         result.get("severity", "N/A"),
         result.get("action", "N/A"),
+        result.get("quarantined", "N/A"),
+        result.get("containment_required", "N/A"),
     )
 
     if result["suspicious"] or should_send_discord_alert(result.get("action")):
         _LOGGER.warning(
             "Suspicious DNS query detected domain=%s entropy=%.1f "
-            "suspicious=%s risk_score=%s severity=%s action=%s",
+            "suspicious=%s risk_score=%s severity=%s action=%s "
+            "quarantined=%s containment_required=%s",
             *log_values,
         )
         return
 
     _LOGGER.info(
         "DNS query observed domain=%s entropy=%.1f suspicious=%s "
-        "risk_score=%s severity=%s action=%s",
+        "risk_score=%s severity=%s action=%s quarantined=%s "
+        "containment_required=%s",
         *log_values,
     )
+
+
+def _notify_result_callback(
+    result: dict,
+    result_callback: Callable[[dict], None] | None,
+) -> None:
+    if result_callback is None:
+        return
+
+    try:
+        result_callback(dict(result))
+    except Exception:
+        _LOGGER.warning("DNS result callback failed for domain=%s", result["domain"])
 
 
 def _is_stop_requested(stop_event: object | None) -> bool:
@@ -222,6 +270,7 @@ def _handle_dns_packet(
     udp_layer: object,
     webhook_url: str | None = None,
     threshold: float = 3.5,
+    result_callback: Callable[[dict], None] | None = None,
 ) -> dict | None:
     query_domain = _extract_query_domain(packet, dns_layer, dns_query_layer, udp_layer)
 
@@ -243,8 +292,10 @@ def _handle_dns_packet(
         reputation_result=reputation_result,
         threshold=threshold,
     )
+    result = _enrich_with_action_decision(result)
 
     _log_dns_result(result)
+    _notify_result_callback(result, result_callback)
 
     if webhook_url is not None and should_send_discord_alert(result.get("action")):
         send_discord_alert(result, webhook_url)
@@ -258,6 +309,7 @@ def start_dns_sniffer(
     threshold: float | None = None,
     debug: bool | None = None,
     stop_event: object | None = None,
+    result_callback: Callable[[dict], None] | None = None,
 ) -> None:
     """Start a minimal DNS-only sniffer for outgoing DNS queries."""
     dns_layer, dns_query_layer, udp_layer, sniff = _load_scapy()
@@ -292,6 +344,7 @@ def start_dns_sniffer(
             udp_layer,
             effective_webhook_url,
             effective_threshold,
+            result_callback,
         ),
         "store": False,
     }
