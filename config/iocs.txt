@@ -1,0 +1,2 @@
+# Example only, replace with approved internal IOCs
+exfil-example.test
