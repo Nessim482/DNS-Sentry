@@ -116,6 +116,34 @@ def test_handle_dns_packet_sends_alert_only_when_suspicious(monkeypatch) -> None
     assert sent_alerts[0][1] == TEST_WEBHOOK_URL
 
 
+def test_start_dns_sniffer_uses_config_defaults(monkeypatch) -> None:
+    calls = {}
+    sent_alerts = []
+
+    def fake_sniff(**kwargs: object) -> None:
+        calls.update(kwargs)
+
+    def fake_send_discord_alert(result: dict, webhook_url: str) -> bool:
+        sent_alerts.append((result, webhook_url))
+        return True
+
+    monkeypatch.setattr(sniffer, "_load_scapy", lambda: (DNS, DNSQR, UDP, fake_sniff))
+    monkeypatch.setattr(sniffer, "load_dns_interface", lambda: "Ethernet")
+    monkeypatch.setattr(sniffer, "load_discord_webhook_url", lambda: TEST_WEBHOOK_URL)
+    monkeypatch.setattr(sniffer, "load_dns_entropy_threshold", lambda: 4.0)
+    monkeypatch.setattr(sniffer, "load_dns_debug", lambda: False)
+    monkeypatch.setattr(sniffer, "send_discord_alert", fake_send_discord_alert)
+
+    sniffer.start_dns_sniffer()
+    calls["prn"](
+        make_dns_query_packet("dGhpcy1sb29rcy1saWtlLWJhc2U2NC1kYXRh.attacker.com.")
+    )
+
+    assert calls["iface"] == "Ethernet"
+    assert sent_alerts[0][0]["threshold"] == 4.0
+    assert sent_alerts[0][1] == TEST_WEBHOOK_URL
+
+
 def test_start_dns_sniffer_uses_dns_only_filter(monkeypatch) -> None:
     calls = {}
 

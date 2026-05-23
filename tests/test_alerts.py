@@ -47,6 +47,21 @@ def test_send_discord_alert_posts_payload(monkeypatch) -> None:
     assert "timestamp:" in content
 
 
+def test_send_discord_alert_uses_config_webhook(monkeypatch) -> None:
+    alerts._RECENT_ALERTS.clear()
+    calls = {}
+
+    def fake_post(url: str, json: dict[str, str], timeout: float) -> FakeResponse:
+        calls["url"] = url
+        return FakeResponse(204)
+
+    monkeypatch.setattr(alerts, "load_discord_webhook_url", lambda: TEST_WEBHOOK_URL)
+    monkeypatch.setattr(alerts.requests, "post", fake_post)
+
+    assert alerts.send_discord_alert(suspicious_result()) is True
+    assert calls["url"] == TEST_WEBHOOK_URL
+
+
 def test_send_discord_alert_rejects_invalid_webhook(monkeypatch) -> None:
     alerts._RECENT_ALERTS.clear()
 
