@@ -9,6 +9,10 @@ def test_gui_module_imports_without_running_window() -> None:
     assert callable(gui.run_gui)
 
 
+def test_gui_default_threshold_is_four() -> None:
+    assert gui.DEFAULT_GUI_THRESHOLD == 4.0
+
+
 def test_gui_log_handler_masks_webhook_values() -> None:
     log_queue: gui.Queue[str] = gui.Queue()
     handler = gui._GuiLogHandler(log_queue)
