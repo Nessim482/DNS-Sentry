@@ -230,6 +230,71 @@ def test_run_demo_passes_threshold_config_to_scoring(monkeypatch) -> None:
     assert captured["threshold_config"] == threshold_config
 
 
+def test_run_demo_does_not_persist_when_disabled(monkeypatch, tmp_path) -> None:
+    def fail_persistence(*args, **kwargs) -> None:
+        raise AssertionError("persistence should be disabled")
+
+    monkeypatch.setattr(demo, "_DEMO_DOMAINS", ("normal.example.com",))
+    monkeypatch.setattr(demo, "save_dns_event", fail_persistence)
+    monkeypatch.setattr(demo, "save_quarantine_event", fail_persistence)
+
+    demo.run_demo(enable_persistence=False, database_path=str(tmp_path / "events.db"))
+
+    assert not tmp_path.joinpath("events.db").exists()
+
+
+def test_run_demo_persists_dns_and_quarantine_events(monkeypatch, tmp_path) -> None:
+    saved_dns_events = []
+    saved_quarantine_events = []
+
+    def fake_analyze_domain(domain: str, threshold: float) -> dict[str, str | float | bool]:
+        return {
+            "domain": domain,
+            "subdomain": domain.split(".")[0],
+            "entropy": 4.5,
+            "threshold": threshold,
+            "suspicious": True,
+        }
+
+    def fake_score_domain(
+        domain: str,
+        threshold: float,
+        telemetry_result: dict,
+        reputation_result: dict,
+        context: dict,
+    ) -> dict:
+        return {
+            "domain": domain,
+            "risk_score": 75,
+            "severity": "Dangerous",
+            "action": "quarantine",
+            "reasons": ["forced quarantine action for test"],
+        }
+
+    def fake_save_dns_event(database_path: str, event: dict) -> int:
+        saved_dns_events.append((database_path, event))
+        return 1
+
+    def fake_save_quarantine_event(database_path: str, result: dict) -> int:
+        saved_quarantine_events.append((database_path, result))
+        return 1
+
+    database_path = str(tmp_path / "events.db")
+    monkeypatch.setattr(demo, "_DEMO_DOMAINS", ("quarantine.example.com",))
+    monkeypatch.setattr(demo, "analyze_domain", fake_analyze_domain)
+    monkeypatch.setattr(demo, "score_domain", fake_score_domain)
+    monkeypatch.setattr(demo, "save_dns_event", fake_save_dns_event)
+    monkeypatch.setattr(demo, "save_quarantine_event", fake_save_quarantine_event)
+
+    demo.run_demo(enable_persistence=True, database_path=database_path)
+
+    assert saved_dns_events[0][0] == database_path
+    assert saved_dns_events[0][1]["source"] == "demo"
+    assert saved_dns_events[0][1]["record_type"] == "SIMULATED"
+    assert saved_quarantine_events[0][0] == database_path
+    assert saved_quarantine_events[0][1]["domain"] == "quarantine.example.com"
+
+
 def test_demo_examples_include_logical_quarantine_actions() -> None:
     quarantine_result = demo._enrich_demo_result(
         demo.analyze_domain("simulated-quarantine.malicious-example.test"),

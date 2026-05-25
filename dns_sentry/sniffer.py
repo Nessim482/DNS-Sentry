@@ -8,17 +8,20 @@ from typing import Any
 from .alerts import send_discord_alert, should_send_discord_alert
 from .analyzer import analyze_domain
 from .config import (
+    load_database_path,
     load_discord_webhook_url,
     load_dns_debug,
     load_dns_entropy_threshold,
     load_dns_interface,
     load_dns_risk_thresholds,
+    load_enable_persistence,
 )
 from .logging_config import LOGGER_NAME, setup_logging
 from .parser import parse_dns_query
 from .quarantine import apply_action
 from .reputation import check_reputation, load_domain_list
 from .scoring import ThresholdConfig, score_domain
+from .storage.sqlite import save_dns_event, save_quarantine_event
 from .telemetry import analyze_behavior, get_domain_stats, record_query
 
 _DNS_CAPTURE_FILTER = "udp and dst port 53"
@@ -258,6 +261,16 @@ def _notify_result_callback(
         _LOGGER.warning("DNS result callback failed for domain=%s", result["domain"])
 
 
+def _persist_dns_result(database_path: str, result: dict) -> None:
+    try:
+        save_dns_event(database_path, result)
+
+        if result.get("quarantined"):
+            save_quarantine_event(database_path, result)
+    except Exception:
+        _LOGGER.warning("Could not persist DNS event domain=%s", result["domain"])
+
+
 def _is_stop_requested(stop_event: object | None) -> bool:
     if stop_event is None:
         return False
@@ -279,6 +292,9 @@ def _handle_dns_packet(
     threshold: float = 3.5,
     result_callback: Callable[[dict], None] | None = None,
     threshold_config: ThresholdConfig | None = None,
+    interface: str | None = None,
+    enable_persistence: bool = False,
+    database_path: str | None = None,
 ) -> dict | None:
     query_domain = _extract_query_domain(packet, dns_layer, dns_query_layer, udp_layer)
 
@@ -302,9 +318,19 @@ def _handle_dns_packet(
         threshold_config=threshold_config,
     )
     result = _enrich_with_action_decision(result)
+    result.update(
+        {
+            "interface": interface or "",
+            "record_type": record_type,
+            "source": "live",
+        }
+    )
 
     _log_dns_result(result)
     _notify_result_callback(result, result_callback)
+
+    if enable_persistence and database_path is not None:
+        _persist_dns_result(database_path, result)
 
     if webhook_url is not None and should_send_discord_alert(result.get("action")):
         send_discord_alert(result, webhook_url)
@@ -320,6 +346,8 @@ def start_dns_sniffer(
     debug: bool | None = None,
     stop_event: object | None = None,
     result_callback: Callable[[dict], None] | None = None,
+    enable_persistence: bool | None = None,
+    database_path: str | None = None,
 ) -> None:
     """Start a minimal DNS-only sniffer for outgoing DNS queries."""
     dns_layer, dns_query_layer, udp_layer, sniff = _load_scapy()
@@ -334,6 +362,14 @@ def start_dns_sniffer(
         threshold_config if threshold_config is not None else load_dns_risk_thresholds()
     )
     effective_debug = debug if debug is not None else load_dns_debug()
+    effective_enable_persistence = (
+        enable_persistence
+        if enable_persistence is not None
+        else load_enable_persistence()
+    )
+    effective_database_path = (
+        database_path if database_path is not None else load_database_path()
+    )
     logger = logging.getLogger(LOGGER_NAME)
 
     if logger.handlers:
@@ -359,6 +395,9 @@ def start_dns_sniffer(
             threshold=effective_threshold,
             result_callback=result_callback,
             threshold_config=effective_threshold_config,
+            interface=effective_interface,
+            enable_persistence=effective_enable_persistence,
+            database_path=effective_database_path,
         ),
         "store": False,
     }

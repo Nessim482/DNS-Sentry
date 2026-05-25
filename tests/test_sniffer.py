@@ -347,6 +347,75 @@ def test_handle_dns_packet_sends_discord_for_alert_actions(monkeypatch, action) 
         assert result["containment_required"] is False
 
 
+def test_handle_dns_packet_does_not_persist_when_disabled(monkeypatch, tmp_path) -> None:
+    def fail_persistence(*args, **kwargs) -> None:
+        raise AssertionError("persistence should be disabled")
+
+    monkeypatch.setattr(sniffer, "save_dns_event", fail_persistence)
+    monkeypatch.setattr(sniffer, "save_quarantine_event", fail_persistence)
+
+    result = sniffer._handle_dns_packet(
+        make_dns_query_packet(b"google.com."),
+        DNS,
+        DNSQR,
+        UDP,
+        database_path=str(tmp_path / "events.db"),
+        enable_persistence=False,
+    )
+
+    assert result is not None
+    assert not tmp_path.joinpath("events.db").exists()
+
+
+def test_handle_dns_packet_persists_when_enabled(monkeypatch, tmp_path) -> None:
+    saved_dns_events = []
+    saved_quarantine_events = []
+
+    def fake_score_domain(
+        domain: str,
+        threshold: float,
+        telemetry_result: dict,
+        reputation_result: dict,
+    ) -> dict:
+        return {
+            "domain": domain,
+            "risk_score": 75,
+            "severity": "Dangerous",
+            "action": "quarantine",
+            "reasons": ["forced quarantine action for test"],
+        }
+
+    def fake_save_dns_event(database_path: str, event: dict) -> int:
+        saved_dns_events.append((database_path, event))
+        return 1
+
+    def fake_save_quarantine_event(database_path: str, result: dict) -> int:
+        saved_quarantine_events.append((database_path, result))
+        return 1
+
+    database_path = str(tmp_path / "events.db")
+    monkeypatch.setattr(sniffer, "score_domain", fake_score_domain)
+    monkeypatch.setattr(sniffer, "save_dns_event", fake_save_dns_event)
+    monkeypatch.setattr(sniffer, "save_quarantine_event", fake_save_quarantine_event)
+
+    result = sniffer._handle_dns_packet(
+        make_dns_query_packet(b"quarantine.example.com.", qtype=16),
+        DNS,
+        DNSQR,
+        UDP,
+        interface="Ethernet",
+        database_path=database_path,
+        enable_persistence=True,
+    )
+
+    assert result is not None
+    assert saved_dns_events[0][0] == database_path
+    assert saved_dns_events[0][1]["interface"] == "Ethernet"
+    assert saved_dns_events[0][1]["record_type"] == "TXT"
+    assert saved_dns_events[0][1]["source"] == "live"
+    assert saved_quarantine_events[0][1]["domain"] == "quarantine.example.com"
+
+
 def test_start_dns_sniffer_uses_config_defaults(monkeypatch) -> None:
     calls = {}
     sent_alerts = []
@@ -385,6 +454,8 @@ def test_start_dns_sniffer_uses_config_defaults(monkeypatch) -> None:
         lambda: ThresholdConfig(quarantine_threshold=80),
     )
     monkeypatch.setattr(sniffer, "load_dns_debug", lambda: False)
+    monkeypatch.setattr(sniffer, "load_enable_persistence", lambda: False)
+    monkeypatch.setattr(sniffer, "load_database_path", lambda: "./events.db")
     monkeypatch.setattr(sniffer, "send_discord_alert", fake_send_discord_alert)
     monkeypatch.setattr(sniffer, "score_domain", fake_score_domain)
 

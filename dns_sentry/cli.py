@@ -5,11 +5,13 @@ from collections.abc import Sequence
 import importlib.util
 
 from .config import (
+    load_database_path,
     load_discord_webhook_url,
     load_dns_debug,
     load_dns_entropy_threshold,
     load_dns_interface,
     load_dns_risk_thresholds,
+    load_enable_persistence,
     load_env_file,
 )
 from .demo import run_demo
@@ -46,6 +48,15 @@ def _risk_threshold_int(value: str) -> int:
         raise argparse.ArgumentTypeError("must be between 0 and 100")
 
     return threshold
+
+
+def _non_empty_text(value: str) -> str:
+    cleaned_value = value.strip()
+
+    if not cleaned_value:
+        raise argparse.ArgumentTypeError("must not be empty")
+
+    return cleaned_value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -92,6 +103,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--webhook", help="Discord webhook URL")
     parser.add_argument(
+        "--enable-persistence",
+        action="store_true",
+        help="persist DNS events and logical quarantine events locally with SQLite",
+    )
+    parser.add_argument(
+        "--database-path",
+        type=_non_empty_text,
+        help="SQLite database path for persistence",
+    )
+    parser.add_argument(
         "--demo",
         action="store_true",
         help="run simulated demo mode without network sniffing",
@@ -132,6 +153,8 @@ def check_environment() -> bool:
         load_dns_entropy_threshold()
         load_dns_interface()
         load_dns_risk_thresholds()
+        load_enable_persistence()
+        load_database_path()
         load_dns_debug()
         build_parser()
     except (OSError, ValueError) as error:
@@ -174,6 +197,12 @@ def _resolve_cli_config(args: argparse.Namespace) -> dict[str, object]:
     )
     debug = args.debug if args.debug is not None else load_dns_debug()
     webhook_url = args.webhook if args.webhook is not None else load_discord_webhook_url()
+    enable_persistence = (
+        True if args.enable_persistence else load_enable_persistence()
+    )
+    database_path = (
+        args.database_path if args.database_path is not None else load_database_path()
+    )
 
     if interface is not None and not interface.strip():
         raise ValueError("interface cannot be empty")
@@ -184,6 +213,8 @@ def _resolve_cli_config(args: argparse.Namespace) -> dict[str, object]:
         "threshold_config": threshold_config,
         "debug": debug,
         "webhook_url": webhook_url,
+        "enable_persistence": enable_persistence,
+        "database_path": database_path,
         "demo": args.demo,
     }
 
@@ -196,13 +227,16 @@ def _log_startup(config: dict[str, object]) -> None:
     logger.info("DNS-Sentry starting")
     logger.info(
         "configuration interface=%s threshold=%s debug=%s demo=%s "
-        "discord_webhook_configured=%s risk_thresholds=%s",
+        "discord_webhook_configured=%s risk_thresholds=%s "
+        "persistence_enabled=%s database_path=%s",
         interface,
         config["threshold"],
         config["debug"],
         config["demo"],
         webhook_enabled,
         config["threshold_config"],
+        config["enable_persistence"],
+        config["database_path"],
     )
 
     if config["demo"]:
@@ -233,6 +267,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 threshold=config["threshold"],  # type: ignore[arg-type]
                 webhook_url=config["webhook_url"],  # type: ignore[arg-type]
                 threshold_config=config["threshold_config"],  # type: ignore[arg-type]
+                enable_persistence=config["enable_persistence"],  # type: ignore[arg-type]
+                database_path=config["database_path"],  # type: ignore[arg-type]
             )
         else:
             start_dns_sniffer(
@@ -241,6 +277,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 threshold=config["threshold"],  # type: ignore[arg-type]
                 threshold_config=config["threshold_config"],  # type: ignore[arg-type]
                 debug=config["debug"],  # type: ignore[arg-type]
+                enable_persistence=config["enable_persistence"],  # type: ignore[arg-type]
+                database_path=config["database_path"],  # type: ignore[arg-type]
             )
     except KeyboardInterrupt:
         logger.info("Stopped by user")

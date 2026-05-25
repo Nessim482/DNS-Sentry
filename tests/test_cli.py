@@ -10,6 +10,8 @@ def clear_config_env(monkeypatch) -> None:
         "DNS_ENTROPY_THRESHOLD",
         "DNS_INTERFACE",
         "DNS_DEBUG",
+        "ENABLE_PERSISTENCE",
+        "DATABASE_PATH",
         "DNS_LOW_SUSPICIOUS_THRESHOLD",
         "DNS_ALERT_THRESHOLD",
         "DNS_STRONG_ALERT_THRESHOLD",
@@ -38,6 +40,9 @@ def test_main_starts_sniffer_with_cli_arguments(monkeypatch, tmp_path, capsys) -
             "--debug",
             "--webhook",
             TEST_WEBHOOK_URL,
+            "--enable-persistence",
+            "--database-path",
+            "audit.db",
             "--low-suspicious-threshold",
             "20",
             "--alert-threshold",
@@ -65,12 +70,15 @@ def test_main_starts_sniffer_with_cli_arguments(monkeypatch, tmp_path, capsys) -
             containment_threshold=95,
         ),
         "debug": True,
+        "enable_persistence": True,
+        "database_path": "audit.db",
     }
     assert "DNS-Sentry" in output
     assert "interface=Ethernet" in output
     assert "threshold=4.2" in output
     assert "demo=False" in output
     assert "discord_webhook_configured=True" in output
+    assert "persistence_enabled=True" in output
     assert TEST_WEBHOOK_URL not in output
 
 
@@ -84,6 +92,8 @@ def test_main_loads_configuration_from_env_file(monkeypatch, tmp_path) -> None:
                 "DNS_ENTROPY_THRESHOLD=4.0",
                 "DNS_INTERFACE=Wi-Fi",
                 "DNS_DEBUG=true",
+                "ENABLE_PERSISTENCE=true",
+                "DATABASE_PATH=./audit.db",
                 "DNS_LOW_SUSPICIOUS_THRESHOLD=20",
                 "DNS_ALERT_THRESHOLD=40",
                 "DNS_STRONG_ALERT_THRESHOLD=60",
@@ -113,7 +123,28 @@ def test_main_loads_configuration_from_env_file(monkeypatch, tmp_path) -> None:
             containment_threshold=95,
         ),
         "debug": True,
+        "enable_persistence": True,
+        "database_path": "./audit.db",
     }
+
+
+def test_main_cli_persistence_options_override_env_file(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    tmp_path.joinpath(".env").write_text(
+        "\n".join(["ENABLE_PERSISTENCE=false", "DATABASE_PATH=./from-env.db"]),
+        encoding="utf-8",
+    )
+    calls = {}
+
+    def fake_start_dns_sniffer(**kwargs: object) -> None:
+        calls.update(kwargs)
+
+    monkeypatch.setattr(cli, "start_dns_sniffer", fake_start_dns_sniffer)
+
+    assert cli.main(["--enable-persistence", "--database-path", "override.db"]) == 0
+    assert calls["enable_persistence"] is True
+    assert calls["database_path"] == "override.db"
 
 
 def test_main_cli_risk_thresholds_override_env_file(monkeypatch, tmp_path) -> None:
@@ -188,6 +219,8 @@ def test_main_runs_demo_without_starting_sniffer(monkeypatch, tmp_path) -> None:
             "threshold": 4.0,
             "webhook_url": TEST_WEBHOOK_URL,
             "threshold_config": ThresholdConfig(),
+            "enable_persistence": False,
+            "database_path": "./dns_sentry.db",
         }
     }
 
@@ -254,3 +287,14 @@ def test_parser_rejects_invalid_risk_threshold() -> None:
         assert error.code == 2
     else:
         raise AssertionError("invalid risk threshold should exit")
+
+
+def test_parser_rejects_empty_database_path() -> None:
+    parser = cli.build_parser()
+
+    try:
+        parser.parse_args(["--database-path", ""])
+    except SystemExit as error:
+        assert error.code == 2
+    else:
+        raise AssertionError("empty database path should exit")

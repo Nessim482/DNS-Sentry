@@ -6,10 +6,12 @@ from pathlib import Path
 
 from .alerts import send_discord_alert, should_send_discord_alert
 from .analyzer import analyze_domain
+from .config import load_database_path, load_enable_persistence
 from .logging_config import LOGGER_NAME
 from .quarantine import apply_action
 from .reputation import check_reputation, load_domain_list
 from .scoring import ThresholdConfig, score_domain
+from .storage.sqlite import save_dns_event, save_quarantine_event
 
 _LOGGER = logging.getLogger(LOGGER_NAME)
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
@@ -163,14 +165,38 @@ def _notify_result_callback(
         _LOGGER.warning("DNS demo result callback failed for domain=%s", result["domain"])
 
 
+def _persist_demo_result(database_path: str, result: dict) -> None:
+    event = dict(result)
+    event.setdefault("record_type", "SIMULATED")
+    event["source"] = "demo"
+
+    try:
+        save_dns_event(database_path, event)
+
+        if result.get("quarantined"):
+            save_quarantine_event(database_path, result)
+    except Exception:
+        _LOGGER.warning("Could not persist demo DNS event domain=%s", result["domain"])
+
+
 def run_demo(
     threshold: float = 3.5,
     webhook_url: str | None = None,
     result_callback: Callable[[dict], None] | None = None,
     threshold_config: ThresholdConfig | None = None,
+    enable_persistence: bool | None = None,
+    database_path: str | None = None,
 ) -> None:
     """Run DNS-Sentry against simulated DNS domains only."""
     _LOGGER.info("Starting DNS-Sentry demo mode")
+    effective_enable_persistence = (
+        enable_persistence
+        if enable_persistence is not None
+        else load_enable_persistence()
+    )
+    effective_database_path = (
+        database_path if database_path is not None else load_database_path()
+    )
 
     for domain in _DEMO_DOMAINS:
         result = analyze_domain(domain, threshold=threshold)
@@ -194,6 +220,9 @@ def run_demo(
             )
             _notify_result_callback(result, result_callback)
 
+            if effective_enable_persistence:
+                _persist_demo_result(effective_database_path, result)
+
             if webhook_url is not None and should_send_discord_alert(
                 result.get("action")
             ):
@@ -215,4 +244,7 @@ def run_demo(
                 result.get("quarantine_message", "N/A"),
             )
             _notify_result_callback(result, result_callback)
+
+            if effective_enable_persistence:
+                _persist_demo_result(effective_database_path, result)
 
