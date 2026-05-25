@@ -250,8 +250,7 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     main_frame = ttk.Frame(root, padding=12)
     main_frame.pack(fill=tk.BOTH, expand=True)
     main_frame.columnconfigure(0, weight=1)
-    main_frame.rowconfigure(3, weight=5, minsize=260)
-    main_frame.rowconfigure(4, weight=2, minsize=150)
+    main_frame.rowconfigure(1, weight=1)
 
     ttk.Label(main_frame, text="DNS-Sentry", style="Title.TLabel").grid(
         row=0,
@@ -260,17 +259,41 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
         pady=(0, 10),
     )
 
-    config_frame = ttk.LabelFrame(main_frame, text="Configuration", padding=10)
-    config_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+    notebook = ttk.Notebook(main_frame)
+    notebook.grid(row=1, column=0, sticky="nsew")
+
+    monitoring_tab = ttk.Frame(notebook, padding=10)
+    risk_tab = ttk.Frame(notebook, padding=10)
+    quarantine_tab = ttk.Frame(notebook, padding=10)
+    events_tab = ttk.Frame(notebook, padding=10)
+    about_tab = ttk.Frame(notebook, padding=10)
+
+    notebook.add(monitoring_tab, text="Monitoring")
+    notebook.add(risk_tab, text="Risk Policy")
+    notebook.add(quarantine_tab, text="Quarantine")
+    notebook.add(events_tab, text="Events")
+    notebook.add(about_tab, text="About / Status")
+
+    monitoring_tab.columnconfigure(0, weight=1)
+    monitoring_tab.rowconfigure(2, weight=1)
+    risk_tab.columnconfigure(0, weight=1)
+    quarantine_tab.columnconfigure(0, weight=1)
+    quarantine_tab.rowconfigure(0, weight=1)
+    events_tab.columnconfigure(0, weight=1)
+    events_tab.rowconfigure(0, weight=1)
+    about_tab.columnconfigure(0, weight=1)
+
+    config_frame = ttk.LabelFrame(monitoring_tab, text="Configuration", padding=10)
+    config_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
     config_frame.columnconfigure(0, weight=3)
     config_frame.columnconfigure(1, weight=1)
 
     general_frame = ttk.Frame(config_frame)
-    general_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+    general_frame.grid(row=0, column=0, sticky="nsew")
     general_frame.columnconfigure(1, weight=1)
 
-    risk_frame = ttk.LabelFrame(config_frame, text="Risk Thresholds", padding=(8, 6))
-    risk_frame.grid(row=0, column=1, sticky="nsew")
+    risk_frame = ttk.LabelFrame(risk_tab, text="Risk Thresholds", padding=(8, 6))
+    risk_frame.grid(row=0, column=0, sticky="ew")
     risk_frame.columnconfigure(1, weight=1)
     risk_frame.columnconfigure(3, weight=1)
 
@@ -357,12 +380,12 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
         pady=3,
     )
 
-    controls_frame = ttk.LabelFrame(main_frame, text="Controls", padding=10)
-    controls_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+    controls_frame = ttk.LabelFrame(monitoring_tab, text="Controls", padding=10)
+    controls_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
     controls_frame.columnconfigure(3, weight=1)
 
-    events_frame = ttk.LabelFrame(main_frame, text="Live Events", padding=10)
-    events_frame.grid(row=3, column=0, sticky="nsew")
+    events_frame = ttk.LabelFrame(monitoring_tab, text="Live Events", padding=10)
+    events_frame.grid(row=2, column=0, sticky="nsew")
     events_frame.columnconfigure(0, weight=1)
     events_frame.rowconfigure(1, weight=1)
 
@@ -384,10 +407,19 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     )
     log_text.grid(row=1, column=0, sticky="nsew")
 
-    quarantine_frame = ttk.LabelFrame(main_frame, text="Quarantine", padding=10)
-    quarantine_frame.grid(row=4, column=0, sticky="nsew")
+    quarantine_frame = ttk.LabelFrame(quarantine_tab, text="Quarantine", padding=10)
+    quarantine_frame.grid(row=0, column=0, sticky="nsew")
     quarantine_frame.columnconfigure(0, weight=1)
     quarantine_frame.rowconfigure(1, weight=1)
+
+    stored_events_frame = ttk.LabelFrame(events_tab, text="Stored Events", padding=10)
+    stored_events_frame.grid(row=0, column=0, sticky="nsew")
+    stored_events_frame.columnconfigure(0, weight=1)
+    stored_events_frame.rowconfigure(0, weight=1)
+
+    status_frame = ttk.LabelFrame(about_tab, text="Status", padding=10)
+    status_frame.grid(row=0, column=0, sticky="ew")
+    status_frame.columnconfigure(0, weight=1)
 
     quarantine_tree = ttk.Treeview(
         quarantine_frame,
