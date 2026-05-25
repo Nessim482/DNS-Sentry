@@ -12,11 +12,13 @@ from .config import (
     load_dns_interface,
     load_dns_risk_thresholds,
     load_env_file,
+    load_risk_profile,
 )
 from .demo import run_demo
 from .export import export_events_to_csv, export_events_to_json
 from .gui import run_gui
 from .logging_config import setup_logging
+from .scoring import RISK_PROFILE_NAMES, normalize_risk_profile_name
 from .sniffer import start_dns_sniffer
 from .storage.sqlite import list_dns_events
 
@@ -49,6 +51,16 @@ def _risk_threshold_int(value: str) -> int:
         raise argparse.ArgumentTypeError("must be between 0 and 100")
 
     return threshold
+
+
+def _risk_profile(value: str) -> str:
+    profile_name = normalize_risk_profile_name(value)
+
+    if profile_name not in RISK_PROFILE_NAMES:
+        valid_profiles = ", ".join(RISK_PROFILE_NAMES)
+        raise argparse.ArgumentTypeError(f"must be one of: {valid_profiles}")
+
+    return profile_name
 
 
 def _positive_int(value: str) -> int:
@@ -107,6 +119,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--containment-threshold",
         type=_risk_threshold_int,
         help="risk score threshold for Critical/quarantine_and_containment",
+    )
+    parser.add_argument(
+        "--profile",
+        type=_risk_profile,
+        choices=RISK_PROFILE_NAMES,
+        help="risk profile used as the base threshold policy",
     )
     parser.add_argument(
         "--debug",
@@ -189,6 +207,7 @@ def check_environment() -> bool:
         load_discord_webhook_url()
         load_dns_entropy_threshold()
         load_dns_interface()
+        load_risk_profile()
         load_dns_risk_thresholds()
         load_database_path()
         load_dns_debug()
@@ -282,8 +301,10 @@ def _resolve_cli_config(args: argparse.Namespace) -> dict[str, object]:
     threshold = (
         args.threshold if args.threshold is not None else load_dns_entropy_threshold()
     )
+    risk_profile = args.profile if args.profile is not None else load_risk_profile()
     threshold_config = load_dns_risk_thresholds(
-        overrides=_risk_threshold_overrides(args)
+        profile_name=risk_profile,
+        overrides=_risk_threshold_overrides(args),
     )
     debug = args.debug if args.debug is not None else load_dns_debug()
     webhook_url = args.webhook if args.webhook is not None else load_discord_webhook_url()
@@ -295,6 +316,7 @@ def _resolve_cli_config(args: argparse.Namespace) -> dict[str, object]:
         "interface": interface,
         "threshold": threshold,
         "threshold_config": threshold_config,
+        "risk_profile": risk_profile,
         "debug": debug,
         "webhook_url": webhook_url,
         "demo": args.demo,
@@ -309,12 +331,13 @@ def _log_startup(config: dict[str, object]) -> None:
     logger.info("DNS-Sentry starting")
     logger.info(
         "configuration interface=%s threshold=%s debug=%s demo=%s "
-        "discord_webhook_configured=%s risk_thresholds=%s",
+        "discord_webhook_configured=%s risk_profile=%s risk_thresholds=%s",
         interface,
         config["threshold"],
         config["debug"],
         config["demo"],
         webhook_enabled,
+        config["risk_profile"],
         config["threshold_config"],
     )
 
@@ -339,7 +362,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         config = _resolve_cli_config(args)
 
         if args.gui:
-            run_gui(threshold_config=config["threshold_config"])  # type: ignore[arg-type]
+            gui_kwargs = {"threshold_config": config["threshold_config"]}
+            if args.profile is not None:
+                gui_kwargs["risk_profile"] = config["risk_profile"]
+            run_gui(**gui_kwargs)  # type: ignore[arg-type]
             return 0
 
         _log_startup(config)
