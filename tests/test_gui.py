@@ -261,6 +261,32 @@ def test_parse_risk_thresholds_rejects_incoherent_values() -> None:
         raise AssertionError("incoherent risk thresholds should fail")
 
 
+def test_gui_exposes_risk_profile_options() -> None:
+    assert gui.RISK_PROFILE_NAMES == (
+        "personal",
+        "balanced",
+        "enterprise",
+        "paranoid",
+        "demo",
+    )
+
+
+def test_gui_profile_threshold_values_are_display_ready() -> None:
+    profile_config = gui.get_threshold_config_for_profile("demo")
+
+    assert gui._threshold_field_values(profile_config) == (
+        "20",
+        "35",
+        "50",
+        "65",
+        "80",
+    )
+
+
+def test_gui_risk_profile_status_text() -> None:
+    assert gui._risk_profile_status_text("enterprise") == "Risk profile: enterprise"
+
+
 def test_parse_positive_limit_accepts_valid_value() -> None:
     assert gui._parse_positive_limit("20") == 20
 

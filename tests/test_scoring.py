@@ -3,8 +3,10 @@ import socket
 import pytest
 
 from dns_sentry.scoring import (
+    RISK_PROFILE_NAMES,
     ThresholdConfig,
     decide_action,
+    get_threshold_config_for_profile,
     score_domain,
     validate_thresholds,
 )
@@ -18,6 +20,34 @@ def test_threshold_config_defaults() -> None:
     assert config.strong_alert_threshold == 65
     assert config.quarantine_threshold == 75
     assert config.containment_threshold == 90
+
+
+def test_balanced_risk_profile_is_default() -> None:
+    assert get_threshold_config_for_profile(None) == ThresholdConfig()
+    assert get_threshold_config_for_profile("") == ThresholdConfig()
+    assert get_threshold_config_for_profile("balanced") == ThresholdConfig()
+
+
+@pytest.mark.parametrize("profile_name", RISK_PROFILE_NAMES)
+def test_each_risk_profile_returns_valid_thresholds(profile_name) -> None:
+    profile_config = get_threshold_config_for_profile(profile_name)
+
+    validate_thresholds(profile_config)
+
+
+def test_risk_profile_lookup_is_case_insensitive() -> None:
+    assert get_threshold_config_for_profile("PARANOID") == ThresholdConfig(
+        low_suspicious_threshold=15,
+        alert_threshold=30,
+        strong_alert_threshold=45,
+        quarantine_threshold=60,
+        containment_threshold=80,
+    )
+
+
+def test_unknown_risk_profile_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="unknown risk profile"):
+        get_threshold_config_for_profile("unknown")
 
 
 @pytest.mark.parametrize(
