@@ -52,6 +52,45 @@ def test_gui_taskbar_icon_helper_is_safe_outside_windows(monkeypatch) -> None:
     gui._configure_windows_taskbar_icon()
 
 
+class FakeFullscreenRoot:
+    def __init__(self) -> None:
+        self.fullscreen = False
+        self.bindings = {}
+
+    def attributes(self, name: str, value: bool | None = None) -> bool | None:
+        assert name == "-fullscreen"
+
+        if value is None:
+            return self.fullscreen
+
+        self.fullscreen = value
+        return None
+
+    def bind(self, sequence: str, callback: object) -> None:
+        self.bindings[sequence] = callback
+
+
+def test_fullscreen_helpers_toggle_and_exit() -> None:
+    root = FakeFullscreenRoot()
+
+    assert gui._toggle_fullscreen(root) == "break"
+    assert root.fullscreen is True
+    assert gui._exit_fullscreen(root) == "break"
+    assert root.fullscreen is False
+
+
+def test_fullscreen_shortcuts_are_bound() -> None:
+    root = FakeFullscreenRoot()
+    gui._bind_fullscreen_shortcuts(root)
+
+    assert "<F11>" in root.bindings
+    assert "<Escape>" in root.bindings
+    assert root.bindings["<F11>"](None) == "break"
+    assert root.fullscreen is True
+    assert root.bindings["<Escape>"](None) == "break"
+    assert root.fullscreen is False
+
+
 def test_gui_log_handler_masks_webhook_values() -> None:
     log_queue: gui.Queue[str] = gui.Queue()
     handler = gui._GuiLogHandler(log_queue)

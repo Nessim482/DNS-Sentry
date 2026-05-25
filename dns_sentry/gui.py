@@ -119,6 +119,29 @@ def _configure_windows_taskbar_icon() -> None:
         return
 
 
+def _is_fullscreen(root: object) -> bool:
+    return bool(getattr(root, "attributes")("-fullscreen"))
+
+
+def _set_fullscreen(root: object, enabled: bool) -> None:
+    getattr(root, "attributes")("-fullscreen", enabled)
+
+
+def _toggle_fullscreen(root: object) -> str:
+    _set_fullscreen(root, not _is_fullscreen(root))
+    return "break"
+
+
+def _exit_fullscreen(root: object) -> str:
+    _set_fullscreen(root, False)
+    return "break"
+
+
+def _bind_fullscreen_shortcuts(root: object) -> None:
+    getattr(root, "bind")("<F11>", lambda _event: _toggle_fullscreen(root))
+    getattr(root, "bind")("<Escape>", lambda _event: _exit_fullscreen(root))
+
+
 def _configure_gui_logging(log_queue: Queue[str], debug: bool) -> logging.Logger:
     logger = setup_logging(debug=debug)
     handler = _GuiLogHandler(log_queue)
@@ -186,8 +209,9 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     root = tk.Tk()
     root.title("DNS-Sentry")
     _apply_window_icon(root)
-    root.geometry("820x560")
-    root.minsize(720, 500)
+    _bind_fullscreen_shortcuts(root)
+    root.geometry("980x720")
+    root.minsize(840, 620)
 
     log_queue: Queue[str] = Queue()
     quarantine_queue: Queue[dict] = Queue()
@@ -226,8 +250,8 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     main_frame = ttk.Frame(root, padding=12)
     main_frame.pack(fill=tk.BOTH, expand=True)
     main_frame.columnconfigure(0, weight=1)
-    main_frame.rowconfigure(3, weight=3)
-    main_frame.rowconfigure(4, weight=1)
+    main_frame.rowconfigure(3, weight=5, minsize=260)
+    main_frame.rowconfigure(4, weight=2, minsize=150)
 
     ttk.Label(main_frame, text="DNS-Sentry", style="Title.TLabel").grid(
         row=0,
@@ -238,85 +262,99 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
 
     config_frame = ttk.LabelFrame(main_frame, text="Configuration", padding=10)
     config_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+    config_frame.columnconfigure(0, weight=3)
     config_frame.columnconfigure(1, weight=1)
 
-    ttk.Label(config_frame, text="Discord webhook").grid(row=0, column=0, sticky="w")
-    webhook_entry = ttk.Entry(config_frame, textvariable=webhook_var, show="*")
-    webhook_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=4)
+    general_frame = ttk.Frame(config_frame)
+    general_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+    general_frame.columnconfigure(1, weight=1)
 
-    ttk.Label(config_frame, text="Network interface").grid(row=1, column=0, sticky="w")
-    interface_entry = ttk.Entry(config_frame, textvariable=interface_var)
-    interface_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=4)
+    risk_frame = ttk.LabelFrame(config_frame, text="Risk Thresholds", padding=(8, 6))
+    risk_frame.grid(row=0, column=1, sticky="nsew")
+    risk_frame.columnconfigure(1, weight=1)
+    risk_frame.columnconfigure(3, weight=1)
 
-    ttk.Label(config_frame, text="Entropy threshold").grid(row=2, column=0, sticky="w")
-    threshold_entry = ttk.Entry(config_frame, textvariable=threshold_var, width=12)
-    threshold_entry.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=4)
+    ttk.Label(general_frame, text="Discord webhook").grid(row=0, column=0, sticky="w")
+    webhook_entry = ttk.Entry(general_frame, textvariable=webhook_var, show="*")
+    webhook_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=3)
 
-    ttk.Label(config_frame, text="Low suspicious threshold").grid(
+    ttk.Label(general_frame, text="Network interface").grid(
+        row=1,
+        column=0,
+        sticky="w",
+    )
+    interface_entry = ttk.Entry(general_frame, textvariable=interface_var)
+    interface_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+    ttk.Label(general_frame, text="Entropy threshold").grid(
+        row=2,
+        column=0,
+        sticky="w",
+    )
+    threshold_entry = ttk.Entry(general_frame, textvariable=threshold_var, width=10)
+    threshold_entry.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=3)
+
+    ttk.Checkbutton(general_frame, text="Debug logging", variable=debug_var).grid(
         row=3,
-        column=0,
+        column=1,
         sticky="w",
+        padx=(10, 0),
+        pady=3,
     )
+
+    ttk.Label(risk_frame, text="Low suspicious").grid(row=0, column=0, sticky="w")
     ttk.Entry(
-        config_frame,
+        risk_frame,
         textvariable=low_suspicious_threshold_var,
-        width=12,
-    ).grid(row=3, column=1, sticky="w", padx=(10, 0), pady=4)
+        width=8,
+    ).grid(row=0, column=1, sticky="w", padx=(8, 12), pady=3)
 
-    ttk.Label(config_frame, text="Alert threshold").grid(row=4, column=0, sticky="w")
-    ttk.Entry(config_frame, textvariable=alert_threshold_var, width=12).grid(
-        row=4,
-        column=1,
+    ttk.Label(risk_frame, text="Alert").grid(row=0, column=2, sticky="w")
+    ttk.Entry(risk_frame, textvariable=alert_threshold_var, width=8).grid(
+        row=0,
+        column=3,
         sticky="w",
-        padx=(10, 0),
-        pady=4,
+        padx=(8, 0),
+        pady=3,
     )
 
-    ttk.Label(config_frame, text="Strong alert threshold").grid(
-        row=5,
+    ttk.Label(risk_frame, text="Strong alert").grid(
+        row=1,
         column=0,
         sticky="w",
     )
-    ttk.Entry(config_frame, textvariable=strong_alert_threshold_var, width=12).grid(
-        row=5,
+    ttk.Entry(risk_frame, textvariable=strong_alert_threshold_var, width=8).grid(
+        row=1,
         column=1,
         sticky="w",
-        padx=(10, 0),
-        pady=4,
+        padx=(8, 12),
+        pady=3,
     )
 
-    ttk.Label(config_frame, text="Quarantine threshold").grid(
-        row=6,
+    ttk.Label(risk_frame, text="Quarantine").grid(
+        row=1,
+        column=2,
+        sticky="w",
+    )
+    ttk.Entry(risk_frame, textvariable=quarantine_threshold_var, width=8).grid(
+        row=1,
+        column=3,
+        sticky="w",
+        padx=(8, 0),
+        pady=3,
+    )
+
+    ttk.Label(risk_frame, text="Containment").grid(
+        row=2,
         column=0,
         sticky="w",
     )
-    ttk.Entry(config_frame, textvariable=quarantine_threshold_var, width=12).grid(
-        row=6,
+    ttk.Entry(risk_frame, textvariable=containment_threshold_var, width=8).grid(
+        row=2,
         column=1,
         sticky="w",
-        padx=(10, 0),
-        pady=4,
-    )
-
-    ttk.Label(config_frame, text="Containment threshold").grid(
-        row=7,
-        column=0,
-        sticky="w",
-    )
-    ttk.Entry(config_frame, textvariable=containment_threshold_var, width=12).grid(
-        row=7,
-        column=1,
-        sticky="w",
-        padx=(10, 0),
-        pady=4,
-    )
-
-    ttk.Checkbutton(config_frame, text="Debug logging", variable=debug_var).grid(
-        row=8,
-        column=1,
-        sticky="w",
-        padx=(10, 0),
-        pady=4,
+        padx=(8, 12),
+        pady=3,
     )
 
     controls_frame = ttk.LabelFrame(main_frame, text="Controls", padding=10)
@@ -339,7 +377,7 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
 
     log_text = scrolledtext.ScrolledText(
         events_frame,
-        height=16,
+        height=14,
         state=tk.DISABLED,
         wrap=tk.WORD,
         font=("Consolas", 10),
@@ -355,7 +393,7 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
         quarantine_frame,
         columns=("domain", "risk_score", "severity", "action", "timestamp"),
         show="headings",
-        height=5,
+        height=6,
     )
     quarantine_tree.heading("domain", text="Domain")
     quarantine_tree.heading("risk_score", text="Risk Score")
