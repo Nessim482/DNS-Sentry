@@ -1,6 +1,7 @@
 from dns_sentry import cli
+from dns_sentry import alerts
 from dns_sentry.scoring import ThresholdConfig
-from dns_sentry.storage.sqlite import save_dns_event
+from dns_sentry.storage.sqlite import save_dns_event, save_quarantine_event
 
 TEST_WEBHOOK_URL = "https://example.test/webhook"
 
@@ -12,6 +13,7 @@ def clear_config_env(monkeypatch) -> None:
         "DNS_INTERFACE",
         "DNS_DEBUG",
         "DATABASE_PATH",
+        "ENABLE_PERSISTENCE",
         "RISK_PROFILE",
         "DNS_LOW_SUSPICIOUS_THRESHOLD",
         "DNS_ALERT_THRESHOLD",
@@ -474,3 +476,90 @@ def test_main_export_requires_output(monkeypatch, tmp_path, capsys) -> None:
 
     assert cli.main(["--export", "json"]) == 1
     assert "--output is required" in capsys.readouterr().out
+
+
+def test_main_report_reads_from_sqlite_without_starting_runtime(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    database_path = tmp_path / "events.db"
+    output_path = tmp_path / "report.html"
+    save_dns_event(
+        str(database_path),
+        {
+            "domain": "critical.example.zip",
+            "severity": "Critical",
+            "action": "quarantine_and_containment",
+            "risk_score": 90,
+            "reasons": ["Blacklist match adds 30 reputation points."],
+        },
+    )
+    save_quarantine_event(
+        str(database_path),
+        {
+            "domain": "critical.example.zip",
+            "severity": "Critical",
+            "action": "quarantine_and_containment",
+            "risk_score": 90,
+            "containment_required": True,
+        },
+    )
+
+    def fail_runtime(*args: object, **kwargs: object) -> None:
+        raise AssertionError("report must not start runtime work")
+
+    monkeypatch.setattr(cli, "start_dns_sniffer", fail_runtime)
+    monkeypatch.setattr(cli, "run_gui", fail_runtime)
+    monkeypatch.setattr(cli, "run_demo", fail_runtime)
+    monkeypatch.setattr(alerts, "send_discord_alert", fail_runtime)
+
+    assert (
+        cli.main(
+            [
+                "--report",
+                "--output",
+                str(output_path),
+                "--database-path",
+                str(database_path),
+            ]
+        )
+        == 0
+    )
+
+    html = output_path.read_text(encoding="utf-8")
+    assert "DNS-Sentry Security Report" in html
+    assert "critical.example.zip" in html
+
+
+def test_main_report_generates_empty_report(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    output_path = tmp_path / "empty-report.html"
+
+    assert cli.main(["--report", "--output", str(output_path)]) == 0
+
+    html = output_path.read_text(encoding="utf-8")
+    assert "DNS-Sentry Security Report" in html
+    assert "No data available" in html
+
+
+def test_main_report_requires_output(monkeypatch, tmp_path, capsys) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["--report"]) == 1
+    assert "--output is required" in capsys.readouterr().out
+
+
+def test_main_report_refuses_dangerous_output_path(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["--report", "--output", str(tmp_path / ".env")]) == 1
+    assert "dangerous output path" in capsys.readouterr().out
