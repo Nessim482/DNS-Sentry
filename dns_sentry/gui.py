@@ -3,29 +3,35 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from queue import Empty, Queue
 import sys
 from threading import Event, Thread
 import tkinter as tk
-from tkinter import scrolledtext, ttk
+from tkinter import filedialog, scrolledtext, ttk
 
 from .config import (
+    load_database_path,
     load_discord_webhook_url,
     load_dns_debug,
     load_dns_entropy_threshold,
     load_dns_interface,
     load_dns_risk_thresholds,
+    load_env_file,
 )
 from .demo import run_demo
+from .export import export_events_to_csv, export_events_to_json
 from .logging_config import LOGGER_NAME, mask_sensitive_text, setup_logging
 from .quarantine import QuarantineState
 from .scoring import ThresholdConfig, validate_thresholds
 from .sniffer import start_dns_sniffer
+from .storage.sqlite import list_dns_events
 
 DEFAULT_GUI_THRESHOLD = 4.0
 ICON_RELATIVE_PATH = Path("assets") / "dns-sentry.ico"
 WINDOWS_APP_USER_MODEL_ID = "DNS-Sentry.Desktop"
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 class _GuiLogHandler(logging.Handler):
@@ -52,6 +58,15 @@ def _parse_threshold(value: str) -> float:
     return threshold
 
 
+def _parse_positive_limit(value: str) -> int:
+    limit = int(value.strip())
+
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+
+    return limit
+
+
 def _parse_risk_thresholds(
     low_suspicious_threshold: str,
     alert_threshold: str,
@@ -76,6 +91,48 @@ def _parse_risk_thresholds(
 
 def _resolve_webhook(entry_value: str) -> str | None:
     return _clean_optional_text(entry_value) or load_discord_webhook_url()
+
+
+def _load_persistence_enabled() -> bool:
+    load_env_file()
+    value = os.getenv("ENABLE_PERSISTENCE")
+
+    if value is None:
+        return False
+
+    return value.strip().lower() in _TRUE_VALUES
+
+
+def _events_status_text(persistence_enabled: bool, database_path: str) -> str:
+    if not persistence_enabled:
+        return "Persistence disabled. Stored events are not being written."
+
+    return f"Database: {database_path}"
+
+
+def _event_tree_values(event: dict) -> tuple[str, str, str, str, str, str, str]:
+    return (
+        _format_quarantine_value(event.get("id")),
+        _format_quarantine_value(event.get("timestamp")),
+        _format_quarantine_value(event.get("domain")),
+        _format_quarantine_value(event.get("severity")),
+        _format_quarantine_value(event.get("action")),
+        _format_quarantine_value(event.get("risk_score")),
+        _format_quarantine_value(event.get("source")),
+    )
+
+
+def _clear_tree(tree: object) -> None:
+    for item_id in list(getattr(tree, "get_children")()):
+        getattr(tree, "delete")(item_id)
+
+
+def _populate_events_tree(tree: object, events: list[dict]) -> None:
+    _clear_tree(tree)
+
+    for event in events:
+        item_id = str(event.get("id", event.get("domain", "")))
+        getattr(tree, "insert")("", "end", iid=item_id, values=_event_tree_values(event))
 
 
 def _project_root() -> Path:
@@ -242,6 +299,14 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     webhook_var = tk.StringVar(value="")
     debug_var = tk.BooleanVar(value=load_dns_debug())
     status_var = tk.StringVar(value="Stopped")
+    persistence_enabled = _load_persistence_enabled()
+    database_path = load_database_path()
+    events_limit_var = tk.StringVar(value="100")
+    events_severity_var = tk.StringVar(value="")
+    events_action_var = tk.StringVar(value="")
+    events_status_var = tk.StringVar(
+        value=_events_status_text(persistence_enabled, database_path)
+    )
 
     style = ttk.Style(root)
     style.configure("Title.TLabel", font=("Segoe UI", 14, "bold"))
@@ -415,11 +480,89 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     stored_events_frame = ttk.LabelFrame(events_tab, text="Stored Events", padding=10)
     stored_events_frame.grid(row=0, column=0, sticky="nsew")
     stored_events_frame.columnconfigure(0, weight=1)
-    stored_events_frame.rowconfigure(0, weight=1)
+    stored_events_frame.rowconfigure(2, weight=1)
+
+    events_controls_frame = ttk.Frame(stored_events_frame)
+    events_controls_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+    events_controls_frame.columnconfigure(7, weight=1)
+
+    ttk.Label(events_controls_frame, text="Limit").grid(row=0, column=0, sticky="w")
+    events_limit_entry = ttk.Entry(
+        events_controls_frame,
+        textvariable=events_limit_var,
+        width=8,
+    )
+    events_limit_entry.grid(row=0, column=1, sticky="w", padx=(6, 12))
+
+    ttk.Label(events_controls_frame, text="Severity").grid(row=0, column=2, sticky="w")
+    events_severity_entry = ttk.Entry(
+        events_controls_frame,
+        textvariable=events_severity_var,
+        width=16,
+    )
+    events_severity_entry.grid(row=0, column=3, sticky="w", padx=(6, 12))
+
+    ttk.Label(events_controls_frame, text="Action").grid(row=0, column=4, sticky="w")
+    events_action_entry = ttk.Entry(
+        events_controls_frame,
+        textvariable=events_action_var,
+        width=18,
+    )
+    events_action_entry.grid(row=0, column=5, sticky="w", padx=(6, 12))
+
+    refresh_events_button = ttk.Button(events_controls_frame, text="Refresh")
+    refresh_events_button.grid(row=0, column=6, sticky="w", padx=(0, 8))
+    export_json_button = ttk.Button(events_controls_frame, text="Export JSON")
+    export_json_button.grid(row=0, column=8, sticky="e", padx=(8, 0))
+    export_csv_button = ttk.Button(events_controls_frame, text="Export CSV")
+    export_csv_button.grid(row=0, column=9, sticky="e", padx=(8, 0))
+
+    ttk.Label(stored_events_frame, textvariable=events_status_var).grid(
+        row=1,
+        column=0,
+        sticky="w",
+        pady=(0, 8),
+    )
+
+    events_tree = ttk.Treeview(
+        stored_events_frame,
+        columns=("id", "timestamp", "domain", "severity", "action", "risk_score", "source"),
+        show="headings",
+        height=12,
+    )
+    events_tree.heading("id", text="ID")
+    events_tree.heading("timestamp", text="Timestamp")
+    events_tree.heading("domain", text="Domain")
+    events_tree.heading("severity", text="Severity")
+    events_tree.heading("action", text="Action")
+    events_tree.heading("risk_score", text="Risk Score")
+    events_tree.heading("source", text="Source")
+    events_tree.column("id", width=60, anchor="center")
+    events_tree.column("timestamp", width=140, anchor="center")
+    events_tree.column("domain", width=260, anchor="w")
+    events_tree.column("severity", width=120, anchor="center")
+    events_tree.column("action", width=170, anchor="center")
+    events_tree.column("risk_score", width=90, anchor="center")
+    events_tree.column("source", width=100, anchor="center")
+    events_tree.grid(row=2, column=0, sticky="nsew")
 
     status_frame = ttk.LabelFrame(about_tab, text="Status", padding=10)
     status_frame.grid(row=0, column=0, sticky="ew")
     status_frame.columnconfigure(0, weight=1)
+    ttk.Label(
+        status_frame,
+        text=f"Persistence: {'enabled' if persistence_enabled else 'disabled'}",
+    ).grid(row=0, column=0, sticky="w", pady=2)
+    ttk.Label(status_frame, text=f"Database path: {database_path}").grid(
+        row=1,
+        column=0,
+        sticky="w",
+        pady=2,
+    )
+    ttk.Label(
+        status_frame,
+        text="Npcap required on Windows for live monitoring",
+    ).grid(row=2, column=0, sticky="w", pady=2)
 
     quarantine_tree = ttk.Treeview(
         quarantine_frame,
@@ -591,6 +734,78 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
 
         Thread(target=demo_worker, daemon=True).start()
 
+    def current_events_query() -> tuple[int, str | None, str | None] | None:
+        logger = _configure_gui_logging(log_queue, debug_var.get())
+
+        try:
+            limit = _parse_positive_limit(events_limit_var.get())
+        except ValueError:
+            logger.error("Invalid events limit")
+            return None
+
+        return (
+            limit,
+            _clean_optional_text(events_severity_var.get()),
+            _clean_optional_text(events_action_var.get()),
+        )
+
+    def refresh_events() -> list[dict]:
+        logger = _configure_gui_logging(log_queue, debug_var.get())
+
+        if not persistence_enabled:
+            _clear_tree(events_tree)
+            events_status_var.set(_events_status_text(False, database_path))
+            return []
+
+        query = current_events_query()
+        if query is None:
+            return []
+
+        limit, severity_filter, action_filter = query
+
+        try:
+            events = list_dns_events(
+                database_path,
+                limit=limit,
+                severity=severity_filter,
+                action=action_filter,
+            )
+        except Exception as error:
+            logger.error("Could not load stored DNS events: %s", error)
+            return []
+
+        _populate_events_tree(events_tree, events)
+        events_status_var.set(f"{len(events)} stored event(s) loaded")
+        return events
+
+    def export_events(export_format: str) -> None:
+        logger = _configure_gui_logging(log_queue, debug_var.get())
+
+        if not persistence_enabled:
+            events_status_var.set(_events_status_text(False, database_path))
+            return
+
+        events = refresh_events()
+        extension = f".{export_format}"
+        output_path = filedialog.asksaveasfilename(
+            defaultextension=extension,
+            filetypes=[(f"{export_format.upper()} files", f"*{extension}")],
+        )
+
+        if not output_path:
+            return
+
+        try:
+            if export_format == "json":
+                export_events_to_json(events, output_path)
+            else:
+                export_events_to_csv(events, output_path)
+        except (OSError, ValueError) as error:
+            logger.error("Could not export stored DNS events: %s", error)
+            return
+
+        events_status_var.set(f"Exported {len(events)} event(s)")
+
     ttk.Button(
         controls_frame,
         text="Start Monitoring",
@@ -634,6 +849,9 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
         sticky="e",
         pady=(0, 8),
     )
+    refresh_events_button.configure(command=refresh_events)
+    export_json_button.configure(command=lambda: export_events("json"))
+    export_csv_button.configure(command=lambda: export_events("csv"))
 
     drain_log_queue()
     drain_quarantine_queue()
