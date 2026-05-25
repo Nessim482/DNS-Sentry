@@ -5,15 +5,22 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .scoring import ThresholdConfig, validate_thresholds
+from .scoring import (
+    DEFAULT_RISK_PROFILE,
+    ThresholdConfig,
+    get_threshold_config_for_profile,
+    normalize_risk_profile_name,
+    validate_thresholds,
+)
 
 DEFAULT_DNS_ENTROPY_THRESHOLD = 3.5
 DEFAULT_DNS_INTERFACE: str | None = None
 DEFAULT_DNS_DEBUG = False
-DEFAULT_DNS_RISK_THRESHOLDS = ThresholdConfig()
+DEFAULT_DNS_RISK_THRESHOLDS = get_threshold_config_for_profile(DEFAULT_RISK_PROFILE)
 DEFAULT_DATABASE_PATH = "./dns_sentry.db"
 
 _ENV_FILE = ".env"
+_RISK_PROFILE_ENV_NAME = "RISK_PROFILE"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _RISK_THRESHOLD_ENV_NAMES = {
@@ -92,37 +99,56 @@ def _load_threshold_value(
     return _load_int_env(_RISK_THRESHOLD_ENV_NAMES[field_name], default)
 
 
+def load_risk_profile(default: str = DEFAULT_RISK_PROFILE) -> str:
+    """Load and validate the active risk profile name."""
+    load_env_file()
+    value = os.getenv(_RISK_PROFILE_ENV_NAME)
+    profile_name = normalize_risk_profile_name(value if value is not None else default)
+    get_threshold_config_for_profile(profile_name)
+
+    return profile_name
+
+
 def load_dns_risk_thresholds(
     default: ThresholdConfig = DEFAULT_DNS_RISK_THRESHOLDS,
     overrides: dict[str, int] | None = None,
+    profile_name: str | None = None,
 ) -> ThresholdConfig:
     """Load validated risk decision thresholds from environment values."""
     load_env_file()
+    env_profile = os.getenv(_RISK_PROFILE_ENV_NAME)
+    if profile_name is not None or (env_profile is not None and env_profile.strip()):
+        base_config = get_threshold_config_for_profile(
+            profile_name if profile_name is not None else env_profile
+        )
+    else:
+        base_config = default
+
     threshold_overrides = overrides or {}
     threshold_config = ThresholdConfig(
         low_suspicious_threshold=_load_threshold_value(
             "low_suspicious_threshold",
-            default.low_suspicious_threshold,
+            base_config.low_suspicious_threshold,
             threshold_overrides,
         ),
         alert_threshold=_load_threshold_value(
             "alert_threshold",
-            default.alert_threshold,
+            base_config.alert_threshold,
             threshold_overrides,
         ),
         strong_alert_threshold=_load_threshold_value(
             "strong_alert_threshold",
-            default.strong_alert_threshold,
+            base_config.strong_alert_threshold,
             threshold_overrides,
         ),
         quarantine_threshold=_load_threshold_value(
             "quarantine_threshold",
-            default.quarantine_threshold,
+            base_config.quarantine_threshold,
             threshold_overrides,
         ),
         containment_threshold=_load_threshold_value(
             "containment_threshold",
-            default.containment_threshold,
+            base_config.containment_threshold,
             threshold_overrides,
         ),
     )

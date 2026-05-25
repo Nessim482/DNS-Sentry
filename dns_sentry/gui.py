@@ -19,12 +19,19 @@ from .config import (
     load_dns_interface,
     load_dns_risk_thresholds,
     load_env_file,
+    load_risk_profile,
 )
 from .demo import run_demo
 from .export import export_events_to_csv, export_events_to_json
 from .logging_config import LOGGER_NAME, mask_sensitive_text, setup_logging
 from .quarantine import QuarantineState
-from .scoring import ThresholdConfig, validate_thresholds
+from .scoring import (
+    RISK_PROFILE_NAMES,
+    ThresholdConfig,
+    get_threshold_config_for_profile,
+    normalize_risk_profile_name,
+    validate_thresholds,
+)
 from .sniffer import start_dns_sniffer
 from .storage.sqlite import list_dns_events
 
@@ -87,6 +94,20 @@ def _parse_risk_thresholds(
 
     validate_thresholds(threshold_config)
     return threshold_config
+
+
+def _threshold_field_values(config: ThresholdConfig) -> tuple[str, str, str, str, str]:
+    return (
+        str(config.low_suspicious_threshold),
+        str(config.alert_threshold),
+        str(config.strong_alert_threshold),
+        str(config.quarantine_threshold),
+        str(config.containment_threshold),
+    )
+
+
+def _risk_profile_status_text(profile_name: str) -> str:
+    return f"Risk profile: {profile_name}"
 
 
 def _resolve_webhook(entry_value: str) -> str | None:
@@ -260,7 +281,10 @@ def _clear_quarantine_view(quarantine_state: QuarantineState, tree: object) -> N
         getattr(tree, "delete")(item_id)
 
 
-def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
+def run_gui(
+    threshold_config: ThresholdConfig | None = None,
+    risk_profile: str | None = None,
+) -> None:
     """Run the DNS-Sentry Tkinter dashboard."""
     _configure_windows_taskbar_icon()
     root = tk.Tk()
@@ -277,7 +301,14 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     worker: Thread | None = None
 
     interface_var = tk.StringVar(value=load_dns_interface() or "")
-    initial_threshold_config = threshold_config or load_dns_risk_thresholds()
+    if risk_profile is None:
+        initial_risk_profile = load_risk_profile()
+    else:
+        initial_risk_profile = normalize_risk_profile_name(risk_profile)
+        get_threshold_config_for_profile(initial_risk_profile)
+    initial_threshold_config = threshold_config or load_dns_risk_thresholds(
+        profile_name=initial_risk_profile
+    )
     threshold_var = tk.StringVar(
         value=str(load_dns_entropy_threshold(default=DEFAULT_GUI_THRESHOLD))
     )
@@ -295,6 +326,10 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     )
     containment_threshold_var = tk.StringVar(
         value=str(initial_threshold_config.containment_threshold)
+    )
+    risk_profile_var = tk.StringVar(value=initial_risk_profile)
+    active_profile_var = tk.StringVar(
+        value=_risk_profile_status_text(initial_risk_profile)
     )
     webhook_var = tk.StringVar(value="")
     debug_var = tk.BooleanVar(value=load_dns_debug())
@@ -390,16 +425,40 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
         pady=3,
     )
 
-    ttk.Label(risk_frame, text="Low suspicious").grid(row=0, column=0, sticky="w")
+    ttk.Label(risk_frame, text="Profile").grid(row=0, column=0, sticky="w")
+    risk_profile_select = ttk.Combobox(
+        risk_frame,
+        textvariable=risk_profile_var,
+        values=RISK_PROFILE_NAMES,
+        state="readonly",
+        width=16,
+    )
+    risk_profile_select.grid(
+        row=0,
+        column=1,
+        sticky="w",
+        padx=(8, 12),
+        pady=3,
+    )
+    ttk.Label(risk_frame, textvariable=active_profile_var).grid(
+        row=0,
+        column=2,
+        columnspan=2,
+        sticky="w",
+        padx=(8, 0),
+        pady=3,
+    )
+
+    ttk.Label(risk_frame, text="Low suspicious").grid(row=1, column=0, sticky="w")
     ttk.Entry(
         risk_frame,
         textvariable=low_suspicious_threshold_var,
         width=8,
-    ).grid(row=0, column=1, sticky="w", padx=(8, 12), pady=3)
+    ).grid(row=1, column=1, sticky="w", padx=(8, 12), pady=3)
 
-    ttk.Label(risk_frame, text="Alert").grid(row=0, column=2, sticky="w")
+    ttk.Label(risk_frame, text="Alert").grid(row=1, column=2, sticky="w")
     ttk.Entry(risk_frame, textvariable=alert_threshold_var, width=8).grid(
-        row=0,
+        row=1,
         column=3,
         sticky="w",
         padx=(8, 0),
@@ -407,12 +466,12 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     )
 
     ttk.Label(risk_frame, text="Strong alert").grid(
-        row=1,
+        row=2,
         column=0,
         sticky="w",
     )
     ttk.Entry(risk_frame, textvariable=strong_alert_threshold_var, width=8).grid(
-        row=1,
+        row=2,
         column=1,
         sticky="w",
         padx=(8, 12),
@@ -420,12 +479,12 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     )
 
     ttk.Label(risk_frame, text="Quarantine").grid(
-        row=1,
+        row=2,
         column=2,
         sticky="w",
     )
     ttk.Entry(risk_frame, textvariable=quarantine_threshold_var, width=8).grid(
-        row=1,
+        row=2,
         column=3,
         sticky="w",
         padx=(8, 0),
@@ -433,12 +492,12 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     )
 
     ttk.Label(risk_frame, text="Containment").grid(
-        row=2,
+        row=3,
         column=0,
         sticky="w",
     )
     ttk.Entry(risk_frame, textvariable=containment_threshold_var, width=8).grid(
-        row=2,
+        row=3,
         column=1,
         sticky="w",
         padx=(8, 12),
@@ -553,8 +612,14 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
         status_frame,
         text=f"Persistence: {'enabled' if persistence_enabled else 'disabled'}",
     ).grid(row=0, column=0, sticky="w", pady=2)
-    ttk.Label(status_frame, text=f"Database path: {database_path}").grid(
+    ttk.Label(status_frame, textvariable=active_profile_var).grid(
         row=1,
+        column=0,
+        sticky="w",
+        pady=2,
+    )
+    ttk.Label(status_frame, text=f"Database path: {database_path}").grid(
+        row=2,
         column=0,
         sticky="w",
         pady=2,
@@ -562,7 +627,7 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     ttk.Label(
         status_frame,
         text="Npcap required on Windows for live monitoring",
-    ).grid(row=2, column=0, sticky="w", pady=2)
+    ).grid(row=3, column=0, sticky="w", pady=2)
 
     quarantine_tree = ttk.Treeview(
         quarantine_frame,
@@ -648,6 +713,32 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
             logger.error("Invalid risk thresholds: %s", error)
             return None
 
+    def apply_risk_profile(profile_name: str) -> None:
+        logger = _configure_gui_logging(log_queue, debug_var.get())
+
+        try:
+            normalized_profile = normalize_risk_profile_name(profile_name)
+            profile_thresholds = get_threshold_config_for_profile(normalized_profile)
+        except ValueError as error:
+            logger.error("Invalid risk profile: %s", error)
+            return
+
+        (
+            low_suspicious,
+            alert,
+            strong_alert,
+            quarantine,
+            containment,
+        ) = _threshold_field_values(profile_thresholds)
+        low_suspicious_threshold_var.set(low_suspicious)
+        alert_threshold_var.set(alert)
+        strong_alert_threshold_var.set(strong_alert)
+        quarantine_threshold_var.set(quarantine)
+        containment_threshold_var.set(containment)
+        risk_profile_var.set(normalized_profile)
+        active_profile_var.set(_risk_profile_status_text(normalized_profile))
+        logger.info("Risk profile selected risk_profile=%s", normalized_profile)
+
     def start_monitoring() -> None:
         nonlocal worker
         logger = _configure_gui_logging(log_queue, debug_var.get())
@@ -668,11 +759,12 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
         update_status("Running")
         logger.info(
             "Starting GUI monitoring interface=%s threshold=%s debug=%s "
-            "discord_webhook_configured=%s risk_thresholds=%s",
+            "discord_webhook_configured=%s risk_profile=%s risk_thresholds=%s",
             interface or "auto",
             threshold,
             debug_var.get(),
             webhook_url is not None,
+            risk_profile_var.get(),
             risk_thresholds,
         )
 
@@ -712,10 +804,11 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
         update_status("Running")
         logger.info(
             "Starting GUI demo threshold=%s debug=%s "
-            "discord_webhook_configured=%s risk_thresholds=%s",
+            "discord_webhook_configured=%s risk_profile=%s risk_thresholds=%s",
             threshold,
             debug_var.get(),
             webhook_url is not None,
+            risk_profile_var.get(),
             risk_thresholds,
         )
 
@@ -852,6 +945,10 @@ def run_gui(threshold_config: ThresholdConfig | None = None) -> None:
     refresh_events_button.configure(command=refresh_events)
     export_json_button.configure(command=lambda: export_events("json"))
     export_csv_button.configure(command=lambda: export_events("csv"))
+    risk_profile_select.bind(
+        "<<ComboboxSelected>>",
+        lambda _event: apply_risk_profile(risk_profile_var.get()),
+    )
 
     drain_log_queue()
     drain_quarantine_queue()

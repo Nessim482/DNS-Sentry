@@ -12,6 +12,7 @@ def clear_config_env(monkeypatch) -> None:
         "DNS_INTERFACE",
         "DNS_DEBUG",
         "DATABASE_PATH",
+        "RISK_PROFILE",
         "DNS_LOW_SUSPICIOUS_THRESHOLD",
         "DNS_ALERT_THRESHOLD",
         "DNS_STRONG_ALERT_THRESHOLD",
@@ -136,6 +137,66 @@ def test_main_cli_risk_thresholds_override_env_file(monkeypatch, tmp_path) -> No
     assert calls["threshold_config"] == ThresholdConfig(quarantine_threshold=85)
 
 
+def test_main_cli_profile_loads_thresholds(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    calls = {}
+
+    def fake_start_dns_sniffer(**kwargs: object) -> None:
+        calls.update(kwargs)
+
+    monkeypatch.setattr(cli, "start_dns_sniffer", fake_start_dns_sniffer)
+
+    assert cli.main(["--profile", "paranoid"]) == 0
+    assert calls["threshold_config"] == ThresholdConfig(
+        low_suspicious_threshold=15,
+        alert_threshold=30,
+        strong_alert_threshold=45,
+        quarantine_threshold=60,
+        containment_threshold=80,
+    )
+
+
+def test_main_cli_profile_is_case_insensitive(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    calls = {}
+
+    def fake_start_dns_sniffer(**kwargs: object) -> None:
+        calls.update(kwargs)
+
+    monkeypatch.setattr(cli, "start_dns_sniffer", fake_start_dns_sniffer)
+
+    assert cli.main(["--profile", "DEMO"]) == 0
+    assert calls["threshold_config"] == ThresholdConfig(
+        low_suspicious_threshold=20,
+        alert_threshold=35,
+        strong_alert_threshold=50,
+        quarantine_threshold=65,
+        containment_threshold=80,
+    )
+
+
+def test_main_cli_risk_thresholds_override_profile(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    calls = {}
+
+    def fake_start_dns_sniffer(**kwargs: object) -> None:
+        calls.update(kwargs)
+
+    monkeypatch.setattr(cli, "start_dns_sniffer", fake_start_dns_sniffer)
+
+    assert cli.main(["--profile", "enterprise", "--quarantine-threshold", "88"]) == 0
+    assert calls["threshold_config"] == ThresholdConfig(
+        low_suspicious_threshold=30,
+        alert_threshold=50,
+        strong_alert_threshold=70,
+        quarantine_threshold=88,
+        containment_threshold=95,
+    )
+
+
 def test_main_handles_keyboard_interrupt(monkeypatch, tmp_path, capsys) -> None:
     clear_config_env(monkeypatch)
     monkeypatch.chdir(tmp_path)
@@ -210,6 +271,31 @@ def test_main_runs_gui_without_starting_sniffer(monkeypatch, tmp_path) -> None:
 
     assert cli.main(["--gui"]) == 0
     assert calls == [{"threshold_config": ThresholdConfig()}]
+
+
+def test_main_runs_gui_with_cli_profile(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    def fake_run_gui(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli, "run_gui", fake_run_gui)
+
+    assert cli.main(["--gui", "--profile", "demo"]) == 0
+    assert calls == [
+        {
+            "threshold_config": ThresholdConfig(
+                low_suspicious_threshold=20,
+                alert_threshold=35,
+                strong_alert_threshold=50,
+                quarantine_threshold=65,
+                containment_threshold=80,
+            ),
+            "risk_profile": "demo",
+        }
+    ]
 
 
 def test_main_check_env_does_not_start_sniffer(monkeypatch, tmp_path) -> None:
