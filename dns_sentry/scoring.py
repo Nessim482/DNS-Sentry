@@ -27,6 +27,41 @@ class ThresholdConfig:
     containment_threshold: int = 90
 
 
+DEFAULT_RISK_PROFILE = "balanced"
+RISK_PROFILE_THRESHOLDS = {
+    "personal": ThresholdConfig(
+        low_suspicious_threshold=20,
+        alert_threshold=40,
+        strong_alert_threshold=60,
+        quarantine_threshold=75,
+        containment_threshold=90,
+    ),
+    "balanced": ThresholdConfig(),
+    "enterprise": ThresholdConfig(
+        low_suspicious_threshold=30,
+        alert_threshold=50,
+        strong_alert_threshold=70,
+        quarantine_threshold=85,
+        containment_threshold=95,
+    ),
+    "paranoid": ThresholdConfig(
+        low_suspicious_threshold=15,
+        alert_threshold=30,
+        strong_alert_threshold=45,
+        quarantine_threshold=60,
+        containment_threshold=80,
+    ),
+    "demo": ThresholdConfig(
+        low_suspicious_threshold=20,
+        alert_threshold=35,
+        strong_alert_threshold=50,
+        quarantine_threshold=65,
+        containment_threshold=80,
+    ),
+}
+RISK_PROFILE_NAMES = tuple(RISK_PROFILE_THRESHOLDS)
+
+
 _THRESHOLD_FIELDS = (
     "low_suspicious_threshold",
     "alert_threshold",
@@ -34,6 +69,30 @@ _THRESHOLD_FIELDS = (
     "quarantine_threshold",
     "containment_threshold",
 )
+
+
+def normalize_risk_profile_name(profile_name: str | None) -> str:
+    """Normalize a risk profile name, defaulting to balanced when omitted."""
+    if profile_name is None or not profile_name.strip():
+        return DEFAULT_RISK_PROFILE
+
+    return profile_name.strip().lower()
+
+
+def get_threshold_config_for_profile(profile_name: str | None = None) -> ThresholdConfig:
+    """Return validated threshold defaults for a named risk profile."""
+    normalized_profile_name = normalize_risk_profile_name(profile_name)
+
+    try:
+        threshold_config = RISK_PROFILE_THRESHOLDS[normalized_profile_name]
+    except KeyError as error:
+        valid_profiles = ", ".join(RISK_PROFILE_NAMES)
+        raise ValueError(
+            f"unknown risk profile: {profile_name}. Valid profiles: {valid_profiles}"
+        ) from error
+
+    validate_thresholds(threshold_config)
+    return threshold_config
 
 
 def validate_thresholds(config: ThresholdConfig) -> None:
