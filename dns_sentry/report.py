@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Iterable
 
+from .logging_config import mask_sensitive_text
+
 ALERT_ACTIONS = {
     "alert",
     "strong_alert",
@@ -24,7 +26,11 @@ def _escape(value: object) -> str:
     if value is None:
         return "N/A"
 
-    return html.escape(str(value), quote=True)
+    text = str(value)
+    if any(part in text.lower() for part in SENSITIVE_KEY_PARTS):
+        return "[redacted]"
+
+    return html.escape(mask_sensitive_text(text), quote=True)
 
 
 def _risk_score(event: dict) -> int:
