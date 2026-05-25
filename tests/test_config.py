@@ -10,6 +10,7 @@ def clear_config_env(monkeypatch) -> None:
         "DNS_ENTROPY_THRESHOLD",
         "DNS_INTERFACE",
         "DNS_DEBUG",
+        "DATABASE_PATH",
         "DNS_LOW_SUSPICIOUS_THRESHOLD",
         "DNS_ALERT_THRESHOLD",
         "DNS_STRONG_ALERT_THRESHOLD",
@@ -28,6 +29,7 @@ def test_config_defaults_when_values_are_absent(monkeypatch, tmp_path) -> None:
     assert config.load_dns_interface() is None
     assert config.load_dns_risk_thresholds() == ThresholdConfig()
     assert config.load_dns_debug() is False
+    assert config.load_database_path() == "./dns_sentry.db"
 
 
 def test_config_loads_values_from_env_file(monkeypatch, tmp_path) -> None:
@@ -40,6 +42,7 @@ def test_config_loads_values_from_env_file(monkeypatch, tmp_path) -> None:
                 "DNS_ENTROPY_THRESHOLD=4.25",
                 "DNS_INTERFACE=Ethernet",
                 "DNS_DEBUG=true",
+                "DATABASE_PATH=./events.db",
                 "DNS_LOW_SUSPICIOUS_THRESHOLD=20",
                 "DNS_ALERT_THRESHOLD=40",
                 "DNS_STRONG_ALERT_THRESHOLD=60",
@@ -61,6 +64,7 @@ def test_config_loads_values_from_env_file(monkeypatch, tmp_path) -> None:
         containment_threshold=95,
     )
     assert config.load_dns_debug() is True
+    assert config.load_database_path() == "./events.db"
 
 
 def test_environment_variables_override_env_file(monkeypatch, tmp_path) -> None:
@@ -88,6 +92,21 @@ def test_environment_variables_override_risk_threshold_env_file(
     monkeypatch.setenv("DNS_QUARANTINE_THRESHOLD", "85")
 
     assert config.load_dns_risk_thresholds().quarantine_threshold == 85
+
+
+def test_environment_variables_override_database_path_env_file(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    tmp_path.joinpath(".env").write_text(
+        "DATABASE_PATH=./from-file.db",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DATABASE_PATH", "./from-env.db")
+
+    assert config.load_database_path() == "./from-env.db"
 
 
 def test_invalid_risk_threshold_env_raises_value_error(monkeypatch, tmp_path) -> None:

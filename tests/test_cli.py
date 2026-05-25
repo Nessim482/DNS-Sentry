@@ -1,5 +1,6 @@
 from dns_sentry import cli
 from dns_sentry.scoring import ThresholdConfig
+from dns_sentry.storage.sqlite import save_dns_event
 
 TEST_WEBHOOK_URL = "https://example.test/webhook"
 
@@ -10,6 +11,7 @@ def clear_config_env(monkeypatch) -> None:
         "DNS_ENTROPY_THRESHOLD",
         "DNS_INTERFACE",
         "DNS_DEBUG",
+        "DATABASE_PATH",
         "DNS_LOW_SUSPICIOUS_THRESHOLD",
         "DNS_ALERT_THRESHOLD",
         "DNS_STRONG_ALERT_THRESHOLD",
@@ -254,3 +256,135 @@ def test_parser_rejects_invalid_risk_threshold() -> None:
         assert error.code == 2
     else:
         raise AssertionError("invalid risk threshold should exit")
+
+
+def test_main_history_reads_from_sqlite_without_starting_sniffer(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    database_path = tmp_path / "events.db"
+    save_dns_event(
+        str(database_path),
+        {
+            "domain": "critical.example.com",
+            "severity": "Critical",
+            "action": "quarantine",
+            "risk_score": 80,
+        },
+    )
+
+    def fake_start_dns_sniffer(**kwargs: object) -> None:
+        raise AssertionError("history must not start sniffer")
+
+    monkeypatch.setattr(cli, "start_dns_sniffer", fake_start_dns_sniffer)
+
+    assert cli.main(["--history", "--database-path", str(database_path)]) == 0
+    output = capsys.readouterr().out
+
+    assert "critical.example.com" in output
+    assert "Critical" in output
+    assert "quarantine" in output
+
+
+def test_main_history_filters_severity_and_action(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    database_path = tmp_path / "events.db"
+    save_dns_event(
+        str(database_path),
+        {"domain": "critical.example.com", "severity": "Critical", "action": "alert"},
+    )
+    save_dns_event(
+        str(database_path),
+        {"domain": "safe.example.com", "severity": "Safe", "action": "allow"},
+    )
+
+    assert (
+        cli.main(
+            [
+                "--history",
+                "--database-path",
+                str(database_path),
+                "--filter-severity",
+                "Critical",
+                "--filter-action",
+                "alert",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+
+    assert "critical.example.com" in output
+    assert "safe.example.com" not in output
+
+
+def test_main_export_json_does_not_start_sniffer(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    database_path = tmp_path / "events.db"
+    output_path = tmp_path / "events.json"
+    save_dns_event(str(database_path), {"domain": "example.com"})
+
+    def fake_start_dns_sniffer(**kwargs: object) -> None:
+        raise AssertionError("export must not start sniffer")
+
+    monkeypatch.setattr(cli, "start_dns_sniffer", fake_start_dns_sniffer)
+
+    assert (
+        cli.main(
+            [
+                "--export",
+                "json",
+                "--output",
+                str(output_path),
+                "--database-path",
+                str(database_path),
+            ]
+        )
+        == 0
+    )
+    assert "example.com" in output_path.read_text(encoding="utf-8")
+
+
+def test_main_export_csv_does_not_start_sniffer(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    database_path = tmp_path / "events.db"
+    output_path = tmp_path / "events.csv"
+    save_dns_event(str(database_path), {"domain": "example.com"})
+
+    def fake_start_dns_sniffer(**kwargs: object) -> None:
+        raise AssertionError("export must not start sniffer")
+
+    monkeypatch.setattr(cli, "start_dns_sniffer", fake_start_dns_sniffer)
+
+    assert (
+        cli.main(
+            [
+                "--export",
+                "csv",
+                "--output",
+                str(output_path),
+                "--database-path",
+                str(database_path),
+            ]
+        )
+        == 0
+    )
+    assert "example.com" in output_path.read_text(encoding="utf-8")
+
+
+def test_main_export_requires_output(monkeypatch, tmp_path, capsys) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["--export", "json"]) == 1
+    assert "--output is required" in capsys.readouterr().out
