@@ -5,6 +5,7 @@ from collections.abc import Sequence
 import importlib.util
 
 from .config import (
+    load_database_path,
     load_discord_webhook_url,
     load_dns_debug,
     load_dns_entropy_threshold,
@@ -13,9 +14,11 @@ from .config import (
     load_env_file,
 )
 from .demo import run_demo
+from .export import export_events_to_csv, export_events_to_json
 from .gui import run_gui
 from .logging_config import setup_logging
 from .sniffer import start_dns_sniffer
+from .storage.sqlite import list_dns_events
 
 _CHECK_ENV_MODULES = {
     "Scapy": "scapy",
@@ -46,6 +49,27 @@ def _risk_threshold_int(value: str) -> int:
         raise argparse.ArgumentTypeError("must be between 0 and 100")
 
     return threshold
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed_value = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be an integer") from error
+
+    if parsed_value < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+
+    return parsed_value
+
+
+def _non_empty_text(value: str) -> str:
+    cleaned_value = value.strip()
+
+    if not cleaned_value:
+        raise argparse.ArgumentTypeError("must not be empty")
+
+    return cleaned_value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -92,6 +116,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--webhook", help="Discord webhook URL")
     parser.add_argument(
+        "--history",
+        action="store_true",
+        help="show stored DNS event history without sniffing",
+    )
+    parser.add_argument(
+        "--export",
+        choices=("json", "csv"),
+        help="export stored DNS events without sniffing",
+    )
+    parser.add_argument(
+        "--output",
+        type=_non_empty_text,
+        help="output path for --export",
+    )
+    parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=100,
+        help="maximum number of stored events to read",
+    )
+    parser.add_argument(
+        "--filter-severity",
+        help="filter stored events by severity",
+    )
+    parser.add_argument(
+        "--filter-action",
+        help="filter stored events by action",
+    )
+    parser.add_argument(
+        "--database-path",
+        type=_non_empty_text,
+        help="SQLite database path for history/export",
+    )
+    parser.add_argument(
         "--demo",
         action="store_true",
         help="run simulated demo mode without network sniffing",
@@ -132,6 +190,7 @@ def check_environment() -> bool:
         load_dns_entropy_threshold()
         load_dns_interface()
         load_dns_risk_thresholds()
+        load_database_path()
         load_dns_debug()
         build_parser()
     except (OSError, ValueError) as error:
@@ -160,6 +219,60 @@ def _risk_threshold_overrides(args: argparse.Namespace) -> dict[str, int]:
             overrides[field_name] = value
 
     return overrides
+
+
+def _load_history_events(args: argparse.Namespace) -> list[dict]:
+    database_path = (
+        args.database_path if args.database_path is not None else load_database_path()
+    )
+    return list_dns_events(
+        database_path,
+        limit=args.limit,
+        severity=args.filter_severity,
+        action=args.filter_action,
+    )
+
+
+def _print_history(events: list[dict]) -> None:
+    if not events:
+        print("No DNS events found")
+        return
+
+    print("id\ttimestamp\tdomain\tseverity\taction\trisk_score")
+    for event in events:
+        print(
+            "{id}\t{timestamp}\t{domain}\t{severity}\t{action}\t{risk_score}".format(
+                id=event.get("id", ""),
+                timestamp=event.get("timestamp", ""),
+                domain=event.get("domain", ""),
+                severity=event.get("severity", ""),
+                action=event.get("action", ""),
+                risk_score=event.get("risk_score", ""),
+            )
+        )
+
+
+def _handle_history_or_export(args: argparse.Namespace) -> int:
+    logger = setup_logging()
+
+    if args.export is not None and args.output is None:
+        raise ValueError("--output is required when using --export")
+
+    events = _load_history_events(args)
+
+    if args.history:
+        _print_history(events)
+
+    if args.export is None:
+        return 0
+
+    if args.export == "json":
+        export_events_to_json(events, args.output)
+    else:
+        export_events_to_csv(events, args.output)
+
+    logger.info("Exported %s DNS events to %s", len(events), args.output)
+    return 0
 
 
 def _resolve_cli_config(args: argparse.Namespace) -> dict[str, object]:
@@ -219,6 +332,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.check_env:
             return 0 if check_environment() else 1
+
+        if args.history or args.export is not None:
+            return _handle_history_or_export(args)
 
         config = _resolve_cli_config(args)
 

@@ -11,6 +11,7 @@ DEFAULT_DNS_ENTROPY_THRESHOLD = 3.5
 DEFAULT_DNS_INTERFACE: str | None = None
 DEFAULT_DNS_DEBUG = False
 DEFAULT_DNS_RISK_THRESHOLDS = ThresholdConfig()
+DEFAULT_DATABASE_PATH = "./dns_sentry.db"
 
 _ENV_FILE = ".env"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -159,4 +160,16 @@ def load_dns_debug(default: bool = DEFAULT_DNS_DEBUG) -> bool:
         return False
 
     return default
+
+
+def load_database_path(default: str = DEFAULT_DATABASE_PATH) -> str:
+    """Load the SQLite database path."""
+    load_env_file()
+    value = os.getenv("DATABASE_PATH")
+
+    if value is None:
+        return default
+
+    cleaned_value = value.strip()
+    return cleaned_value or default
 
