@@ -16,6 +16,7 @@ from .config import (
     load_risk_profile,
 )
 from .demo import run_demo
+from .dns_proxy import start_dns_proxy
 from .export import export_events_to_csv, export_events_to_json
 from .gui import run_gui
 from .logging_config import setup_logging
@@ -73,6 +74,15 @@ def _positive_int(value: str) -> int:
 
     if parsed_value < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
+
+    return parsed_value
+
+
+def _port(value: str) -> int:
+    parsed_value = _positive_int(value)
+
+    if parsed_value > 65535:
+        raise argparse.ArgumentTypeError("must be between 1 and 65535")
 
     return parsed_value
 
@@ -183,6 +193,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--gui",
         action="store_true",
         help="run the minimal Tkinter desktop interface",
+    )
+    parser.add_argument(
+        "--dns-proxy",
+        action="store_true",
+        help="run local UDP DNS proxy enforcement mode instead of sniffing",
+    )
+    parser.add_argument(
+        "--listen-host",
+        type=_non_empty_text,
+        default="127.0.0.1",
+        help="local DNS proxy listen address",
+    )
+    parser.add_argument(
+        "--listen-port",
+        type=_port,
+        default=5353,
+        help="local DNS proxy listen UDP port",
+    )
+    parser.add_argument(
+        "--upstream-dns",
+        type=_non_empty_text,
+        default="1.1.1.1",
+        help="upstream DNS resolver address for allowed queries",
+    )
+    parser.add_argument(
+        "--upstream-port",
+        type=_port,
+        default=53,
+        help="upstream DNS resolver UDP port",
     )
     parser.add_argument(
         "--check-env",
@@ -365,6 +404,24 @@ def _handle_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_dns_proxy(args: argparse.Namespace) -> int:
+    load_env_file()
+    debug = args.debug if args.debug is not None else load_dns_debug()
+    threshold = (
+        args.threshold if args.threshold is not None else load_dns_entropy_threshold()
+    )
+    setup_logging(debug=bool(debug))
+
+    start_dns_proxy(
+        listen_host=args.listen_host,
+        listen_port=args.listen_port,
+        upstream_dns=args.upstream_dns,
+        upstream_port=args.upstream_port,
+        threshold=threshold,
+    )
+    return 0
+
+
 def _resolve_cli_config(args: argparse.Namespace) -> dict[str, object]:
     load_env_file()
 
@@ -432,6 +489,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.report:
             return _handle_report(args)
+
+        if args.dns_proxy:
+            return _handle_dns_proxy(args)
 
         config = _resolve_cli_config(args)
 
