@@ -3,6 +3,7 @@
 import argparse
 from collections.abc import Sequence
 import importlib.util
+import os
 
 from .config import (
     load_database_path,
@@ -18,9 +19,10 @@ from .demo import run_demo
 from .export import export_events_to_csv, export_events_to_json
 from .gui import run_gui
 from .logging_config import setup_logging
+from .report import generate_html_report
 from .scoring import RISK_PROFILE_NAMES, normalize_risk_profile_name
 from .sniffer import start_dns_sniffer
-from .storage.sqlite import list_dns_events
+from .storage.sqlite import list_dns_events, list_quarantine_events
 
 _CHECK_ENV_MODULES = {
     "Scapy": "scapy",
@@ -144,6 +146,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="export stored DNS events without sniffing",
     )
     parser.add_argument(
+        "--report",
+        action="store_true",
+        help="generate a local HTML report from stored DNS events without sniffing",
+    )
+    parser.add_argument(
         "--output",
         type=_non_empty_text,
         help="output path for --export",
@@ -252,6 +259,49 @@ def _load_history_events(args: argparse.Namespace) -> list[dict]:
     )
 
 
+def _threshold_config_summary(threshold_config: object) -> dict[str, object]:
+    return {
+        "low_suspicious_threshold": getattr(
+            threshold_config,
+            "low_suspicious_threshold",
+            "",
+        ),
+        "alert_threshold": getattr(threshold_config, "alert_threshold", ""),
+        "strong_alert_threshold": getattr(
+            threshold_config,
+            "strong_alert_threshold",
+            "",
+        ),
+        "quarantine_threshold": getattr(threshold_config, "quarantine_threshold", ""),
+        "containment_threshold": getattr(
+            threshold_config,
+            "containment_threshold",
+            "",
+        ),
+    }
+
+
+def _load_persistence_enabled() -> bool:
+    load_env_file()
+    value = os.getenv("ENABLE_PERSISTENCE")
+    if value is None:
+        return False
+
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _report_config_summary(database_path: str) -> dict[str, object]:
+    risk_profile = load_risk_profile()
+    threshold_config = load_dns_risk_thresholds(profile_name=risk_profile)
+
+    return {
+        "risk_profile": risk_profile,
+        "thresholds": _threshold_config_summary(threshold_config),
+        "persistence_enabled": _load_persistence_enabled(),
+        "database_path": database_path,
+    }
+
+
 def _print_history(events: list[dict]) -> None:
     if not events:
         print("No DNS events found")
@@ -291,6 +341,27 @@ def _handle_history_or_export(args: argparse.Namespace) -> int:
         export_events_to_csv(events, args.output)
 
     logger.info("Exported %s DNS events to %s", len(events), args.output)
+    return 0
+
+
+def _handle_report(args: argparse.Namespace) -> int:
+    logger = setup_logging()
+
+    if args.output is None:
+        raise ValueError("--output is required when using --report")
+
+    database_path = (
+        args.database_path if args.database_path is not None else load_database_path()
+    )
+    events = list_dns_events(database_path, limit=args.limit)
+    quarantine_events = list_quarantine_events(database_path, limit=args.limit)
+    generate_html_report(
+        events,
+        quarantine_events,
+        args.output,
+        config_summary=_report_config_summary(database_path),
+    )
+    logger.info("Generated HTML report at %s", args.output)
     return 0
 
 
@@ -358,6 +429,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.history or args.export is not None:
             return _handle_history_or_export(args)
+
+        if args.report:
+            return _handle_report(args)
 
         config = _resolve_cli_config(args)
 
