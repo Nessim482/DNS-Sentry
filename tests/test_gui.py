@@ -140,7 +140,7 @@ def test_gui_log_handler_keeps_scoring_fields_and_masks_webhook() -> None:
 
 class FakeTree:
     def __init__(self) -> None:
-        self.items: dict[str, tuple[str, str, str, str, str]] = {}
+        self.items: dict[str, tuple[str, ...]] = {}
 
     def exists(self, item_id: str) -> bool:
         return item_id in self.items
@@ -150,11 +150,11 @@ class FakeTree:
         parent: str,
         index: str,
         iid: str,
-        values: tuple[str, str, str, str, str],
+        values: tuple[str, ...],
     ) -> None:
         self.items[iid] = values
 
-    def item(self, item_id: str, values: tuple[str, str, str, str, str]) -> None:
+    def item(self, item_id: str, values: tuple[str, ...]) -> None:
         self.items[item_id] = values
 
     def get_children(self) -> tuple[str, ...]:
@@ -259,4 +259,108 @@ def test_parse_risk_thresholds_rejects_incoherent_values() -> None:
         assert "invalid threshold order" in str(error)
     else:
         raise AssertionError("incoherent risk thresholds should fail")
+
+
+def test_parse_positive_limit_accepts_valid_value() -> None:
+    assert gui._parse_positive_limit("20") == 20
+
+
+def test_parse_positive_limit_rejects_zero() -> None:
+    try:
+        gui._parse_positive_limit("0")
+    except ValueError as error:
+        assert "limit must be at least 1" in str(error)
+    else:
+        raise AssertionError("zero events limit should fail")
+
+
+def test_load_persistence_enabled_reads_environment(monkeypatch) -> None:
+    monkeypatch.setattr(gui, "load_env_file", lambda: None)
+    monkeypatch.setenv("ENABLE_PERSISTENCE", "true")
+
+    assert gui._load_persistence_enabled() is True
+
+    monkeypatch.setenv("ENABLE_PERSISTENCE", "false")
+
+    assert gui._load_persistence_enabled() is False
+
+
+def test_events_status_text_reports_disabled_or_database() -> None:
+    assert "Persistence disabled" in gui._events_status_text(False, "events.db")
+    assert gui._events_status_text(True, "events.db") == "Database: events.db"
+
+
+def test_event_tree_values_include_expected_fields_without_secrets() -> None:
+    values = gui._event_tree_values(
+        {
+            "id": 7,
+            "timestamp": 123.5,
+            "domain": "danger.example.test",
+            "severity": "Dangerous",
+            "action": "quarantine",
+            "risk_score": 80,
+            "source": "demo",
+            "webhook_url": TEST_WEBHOOK_URL,
+        }
+    )
+
+    assert values == (
+        "7",
+        "123.5",
+        "danger.example.test",
+        "Dangerous",
+        "quarantine",
+        "80",
+        "demo",
+    )
+    assert TEST_WEBHOOK_URL not in str(values)
+
+
+def test_populate_events_tree_replaces_existing_items_and_clear_tree() -> None:
+    tree = FakeTree()
+    tree.insert("", "end", iid="old", values=("old.example.test",))
+
+    gui._populate_events_tree(
+        tree,
+        [
+            {
+                "id": 1,
+                "timestamp": 10.0,
+                "domain": "first.example.test",
+                "severity": "Safe",
+                "action": "allow",
+                "risk_score": 0,
+                "source": "demo",
+            },
+            {
+                "id": 2,
+                "timestamp": 20.0,
+                "domain": "second.example.test",
+                "severity": "Critical",
+                "action": "quarantine_and_containment",
+                "risk_score": 95,
+                "source": "live",
+            },
+        ],
+    )
+
+    assert "old" not in tree.items
+    assert tree.items["1"] == (
+        "1",
+        "10.0",
+        "first.example.test",
+        "Safe",
+        "allow",
+        "0",
+        "demo",
+    )
+    assert tree.items["2"][2:5] == (
+        "second.example.test",
+        "Critical",
+        "quarantine_and_containment",
+    )
+
+    gui._clear_tree(tree)
+
+    assert tree.items == {}
 
