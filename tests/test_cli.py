@@ -300,6 +300,50 @@ def test_main_runs_gui_with_cli_profile(monkeypatch, tmp_path) -> None:
     ]
 
 
+def test_main_dns_proxy_calls_proxy_without_sniffer_or_gui(monkeypatch, tmp_path) -> None:
+    clear_config_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    calls = {}
+
+    def fake_start_dns_proxy(**kwargs: object) -> None:
+        calls["proxy"] = kwargs
+
+    def fail_runtime(*args: object, **kwargs: object) -> None:
+        raise AssertionError("DNS proxy mode must not start other runtimes")
+
+    monkeypatch.setattr(cli, "start_dns_proxy", fake_start_dns_proxy)
+    monkeypatch.setattr(cli, "start_dns_sniffer", fail_runtime)
+    monkeypatch.setattr(cli, "run_gui", fail_runtime)
+
+    assert (
+        cli.main(
+            [
+                "--dns-proxy",
+                "--listen-host",
+                "127.0.0.1",
+                "--listen-port",
+                "5353",
+                "--upstream-dns",
+                "1.1.1.1",
+                "--upstream-port",
+                "53",
+                "--threshold",
+                "4.2",
+            ]
+        )
+        == 0
+    )
+    assert calls == {
+        "proxy": {
+            "listen_host": "127.0.0.1",
+            "listen_port": 5353,
+            "upstream_dns": "1.1.1.1",
+            "upstream_port": 53,
+            "threshold": 4.2,
+        }
+    }
+
+
 def test_main_check_env_does_not_start_sniffer(monkeypatch, tmp_path) -> None:
     clear_config_env(monkeypatch)
     monkeypatch.chdir(tmp_path)
